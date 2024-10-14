@@ -1,0 +1,9 @@
+[package]
+name = "ExeViewer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4.5.20", features = ["derive"] }
+elf = "0.7.4"
+ratatui = "0.28.1"
