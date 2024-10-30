@@ -1,8 +1,11 @@
+use std::fs;
 use std::io::{self, stdout};
-use std::ops::Deref;
 use std::path::PathBuf;
 use clap::Parser;
 
+use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::style::{Modifier, Style};
+use ratatui::widgets::ListState;
 use ratatui::{
     backend::CrosstermBackend,
     crossterm::{
@@ -12,16 +15,12 @@ use ratatui::{
         },
         ExecutableCommand,
     },
-    widgets::{Block, Paragraph},
+    widgets::{Block, Paragraph, List, ListDirection},
     Frame, Terminal,
 };
 
-use elf::ElfBytes;
-use elf::endian::AnyEndian;
-use elf::note::Note;
-use elf::note::NoteGnuBuildId;
-use elf::section::SectionHeader;
-
+mod elf;
+use elf::Elf;
 
 /// Simple program to greet a person
 #[derive(Parser)]
@@ -34,20 +33,25 @@ struct Args {
 
 fn main() -> io::Result<()> {
     let args = Args::parse();
-
-    let path = std::path::PathBuf::from(&args.file);
-    let file_data = std::fs::read(path).expect("Could not read file.");
-    let slice = file_data.as_slice();
-    let file = ElfBytes::<AnyEndian>::minimal_parse(slice).expect("Open elf file");
-
+    let buffer = fs::read(&args.file).expect("file should read");
+    let file = Elf::new(&buffer);
+    
     // Find lazy-parsing types for the common ELF sections (we want .dynsym, .dynstr, .hash)
-    let symtable = file.symbol_table().expect("symtab should parse");
+    let symtable = file.elf.symbol_table().expect("symtab should parse");
     let (symtab, strtab) = symtable.unwrap();
 
-    let mut content = String::new();
+    let mut content = Vec::new();
     symtab.iter().for_each(|sym| {
-        content.push_str( &format!("Symbol: {:?}\n", strtab.get(sym.st_name as usize).unwrap()) );
+        content.push(strtab.get(sym.st_name as usize).unwrap());
     });
+
+    let list = List::new(content)
+        .block(Block::bordered().title("Symbols"))
+        .highlight_style(Style::default().add_modifier(Modifier::ITALIC))
+        .highlight_symbol(">>")
+        .repeat_highlight_symbol(true)
+        .direction(ListDirection::TopToBottom);
+    let mut state = ListState::default();
 
     enable_raw_mode()?;
     stdout().execute(EnterAlternateScreen)?;
@@ -57,7 +61,7 @@ fn main() -> io::Result<()> {
     while !should_quit {
         terminal.draw(|frame: &mut Frame|{
             // ui(&mut frame);
-            ui(frame, &args, &content);
+            ui(frame, &args, &list, &mut state);
         })?;
         should_quit = handle_events()?;
     }
@@ -78,9 +82,23 @@ fn handle_events() -> io::Result<bool> {
     Ok(false)
 }
 
-fn ui(frame: &mut Frame, args: &Args, content: &String) {
-    frame.render_widget(
-        Paragraph::new(content.as_str()).block(Block::bordered().title("Greeting")),
-        frame.area(),
+fn ui(frame: &mut Frame, args: &Args, list: &List, state: &mut ListState) {
+    let layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(vec![
+            Constraint::Percentage(30),
+            Constraint::Percentage(70),
+        ])
+        .split(frame.area());
+
+    frame.render_stateful_widget(
+        list,
+        layout[0],
+        state,
     );
+
+    frame.render_widget(
+        Paragraph::new(args.file.to_str().unwrap()).block(Block::default().title("File")),
+        layout[1],
+    )
 }
