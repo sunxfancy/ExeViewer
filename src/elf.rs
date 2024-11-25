@@ -25,9 +25,9 @@ impl<'a> Elf<'a> {
     pub fn decompile_symbol(&self, symbol_address: u64, symbol_size: usize) -> String {
         // 读取内存片段
         let shdr = self.elf.section_header_by_name(".text").expect("Section not found");
-        let (section, header) = self.elf.section_data(&shdr.unwrap()).expect("Section data not found");
+        let (section, _header) = self.elf.section_data(&shdr.unwrap()).expect("Section data not found");
         
-        if (symbol_address < shdr.unwrap().sh_addr)  {
+        if symbol_address < shdr.unwrap().sh_addr  {
             return String::from("Symbol out of range");
         }
 
