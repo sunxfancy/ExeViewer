@@ -58,3 +58,45 @@ impl<'a> Elf<'a> {
     
 
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_decompile_symbol_invalid_address() {
+        let data = include_bytes!("../test-program/slip").to_vec();
+        let elf = Elf::new(&data);
+        
+        // Test address below text section
+        let result = elf.decompile_symbol(0, 10);
+        assert_eq!(result, "Symbol out of range");
+    }
+
+    #[test]
+    fn test_decompile_symbol_overflow() {
+        let data = include_bytes!("../test-program/slip").to_vec();
+        let elf = Elf::new(&data);
+        
+        // Get text section header
+        let shdr = elf.elf.section_header_by_name(".text").unwrap().unwrap();
+        
+        // Test size that would overflow section
+        let result = elf.decompile_symbol(shdr.sh_addr, shdr.sh_size as usize + 1);
+        assert_eq!(result, "Symbol out of range");
+    }
+
+    #[test]
+    fn test_decompile_symbol_valid() {
+        let data = include_bytes!("../test-program/slip").to_vec();
+        let elf = Elf::new(&data);
+        
+        let shdr = elf.elf.section_header_by_name(".text").unwrap().unwrap();
+        
+        // Test valid address and size
+        let result = elf.decompile_symbol(shdr.sh_addr, 16);
+        assert!(!result.is_empty());
+        assert!(result.contains('\n'));
+    }
+}

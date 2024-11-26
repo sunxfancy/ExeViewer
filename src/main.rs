@@ -5,6 +5,7 @@ use ratatui::symbols;
 use ratatui::text::Line;
 use std::fs;
 use std::io::{self, stdout};
+use std::iter::Sum;
 use std::path::PathBuf;
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -24,7 +25,12 @@ use ratatui::{
 use strum::{Display, EnumIter, FromRepr, IntoEnumIterator};
 
 mod elf;
+mod summary;
+mod symbol;
+
 use elf::Elf;
+use summary::SummaryPage;
+use symbol::SymbolPage;
 
 /// Simple program to greet a person
 #[derive(Parser)]
@@ -37,6 +43,7 @@ struct Args {
 struct App<'a> {
     should_quit: bool,
     elf_file: Elf<'a>,
+    summary_page: SummaryPage<'a>,
     symbol_page: SymbolPage<'a>,
     selected_tab: AppTab,
 }
@@ -54,36 +61,21 @@ enum AppTab {
     Tab4,
 }
 
-
-struct SymbolPage<'a> {
-    content: Vec<Symbol>,
-    list: List<'a>,
-    state: ListState,
-}
-
-struct Symbol {
-    address: u64,
-    size: u64,
-    decompiled: bool,
-    data: String,
-}
-
 impl App<'_> {
-    fn new<'a>(elf_file: Elf<'a>, name_list: Vec<&'a str>, content: Vec<Symbol>) -> App<'a> {
-        let list = List::new(name_list)
-            .block(Block::bordered().title("Symbols"))
-            .highlight_style(Style::default().add_modifier(Modifier::ITALIC))
-            .highlight_symbol(">>")
-            .repeat_highlight_symbol(true)
-            .direction(ListDirection::TopToBottom);
+    fn new<'a>(elf_file: Elf<'a>) -> App<'a> {
+        let sectab = elf_file
+            .elf
+            .section_headers()
+            .expect("sections should parse");
+        // Find lazy-parsing types for the common ELF sections (we want .dynsym, .dynstr, .hash)
+        let symtable = elf_file.elf.symbol_table().expect("symtab should parse");
+        let (symtab, strtab) = symtable.unwrap();
+
         App {
             should_quit: false,
-            elf_file: elf_file,
-            symbol_page: SymbolPage {
-                content: content,
-                list: list,
-                state: ListState::default(),
-            },
+            elf_file,
+            summary_page: SummaryPage::new(sectab, strtab),
+            symbol_page: SymbolPage::new(symtab, strtab),
             selected_tab: AppTab::Summary,
         }
     }
@@ -108,6 +100,24 @@ impl App<'_> {
                         KeyCode::Up => {
                             self.select_previous();
                         }
+                        KeyCode::Right => {
+                            self.select_right();
+                        }
+                        KeyCode::Left => {
+                            self.select_left();
+                        }
+                        KeyCode::Char('1') => {
+                            self.selected_tab = AppTab::Summary;
+                        }
+                        KeyCode::Char('2') => {
+                            self.selected_tab = AppTab::Deassembly;
+                        }
+                        KeyCode::Char('3') => {
+                            self.selected_tab = AppTab::Tab3;
+                        }
+                        KeyCode::Char('4') => {
+                            self.selected_tab = AppTab::Tab4;
+                        }
                         _ => {}
                     }
                 }
@@ -116,25 +126,40 @@ impl App<'_> {
         Ok(false)
     }
 
-    fn load_symbol(&mut self, idx: usize) {
-        let symbol = &self.symbol_page.content[idx];
-        if !symbol.decompiled {
-            let decompiled = self
-                .elf_file
-                .decompile_symbol(symbol.address, symbol.size as usize);
-            self.symbol_page.content[idx].data = decompiled;
-            self.symbol_page.content[idx].decompiled = true;
+    fn select_next(&mut self) {
+        match self.selected_tab {
+            AppTab::Summary => self.summary_page.state.select_next(),
+            AppTab::Deassembly => self.symbol_page.select_next(&self.elf_file),
+            AppTab::Tab3 => {}
+            AppTab::Tab4 => {}
         }
     }
 
-    fn select_next(&mut self) {
-        self.symbol_page.state.select_next();
-        let idx: usize = self.symbol_page.state.selected().unwrap();
-        self.load_symbol(idx);
+    fn select_previous(&mut self) {
+        match self.selected_tab {
+            AppTab::Summary => self.summary_page.state.select_previous(),
+            AppTab::Deassembly => self.symbol_page.select_previous(&self.elf_file),
+            AppTab::Tab3 => {}
+            AppTab::Tab4 => {}
+        }
     }
 
-    fn select_previous(&mut self) {
-        self.symbol_page.state.select_previous();
+    fn select_left(&mut self) {
+        match self.selected_tab {
+            AppTab::Summary => {}
+            AppTab::Deassembly => self.symbol_page.select_left(),
+            AppTab::Tab3 => {}
+            AppTab::Tab4 => {}
+        }
+    }
+
+    fn select_right(&mut self) {
+        match self.selected_tab {
+            AppTab::Summary => {}
+            AppTab::Deassembly => self.symbol_page.select_right(),
+            AppTab::Tab3 => {}
+            AppTab::Tab4 => {}
+        }
     }
 
     fn render_tabs(&self, area: Rect, buf: &mut Buffer) {
@@ -151,10 +176,10 @@ impl App<'_> {
 
     fn render_pages(&mut self, area: Rect, buf: &mut Buffer) {
         match self.selected_tab {
-            AppTab::Summary => (&mut self.symbol_page).render(area, buf),
+            AppTab::Summary => (&mut self.summary_page).render(area, buf),
             AppTab::Deassembly => (&mut self.symbol_page).render(area, buf),
-            AppTab::Tab3 => (&mut self.symbol_page).render(area, buf),
-            AppTab::Tab4 => (&mut self.symbol_page).render(area, buf),
+            AppTab::Tab3 => {}
+            AppTab::Tab4 => {}
         }
     }
 }
@@ -212,49 +237,11 @@ impl AppTab {
     }
 }
 
-impl Widget for &mut SymbolPage<'_> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        let layout = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints(vec![Constraint::Percentage(30), Constraint::Percentage(70)])
-            .split(area);
-
-        StatefulWidget::render(&self.list, layout[0], buf, &mut self.state);
-        let selected = self.state.selected();
-        
-        Paragraph::new(if selected.is_none() {
-            "Select a symbol to decompile"
-        } else {
-            self.content[selected.unwrap()].data.as_str()
-        })
-        .block(Block::bordered().title("Assembly"))
-        .render(layout[1], buf);
-    }
-}
-
 fn main() -> io::Result<()> {
     let args = Args::parse();
     let buffer = fs::read(&args.file).expect("file should read");
     let file: Elf<'_> = Elf::new(&buffer);
-
-    // Find lazy-parsing types for the common ELF sections (we want .dynsym, .dynstr, .hash)
-    let symtable = file.elf.symbol_table().expect("symtab should parse");
-    let (symtab, strtab) = symtable.unwrap();
-
-    let mut name_list: Vec<&str> = Vec::new();
-    let mut content: Vec<Symbol> = Vec::new();
-    symtab.iter().for_each(|sym| {
-        let name = strtab.get(sym.st_name as usize).unwrap();
-        name_list.push(name);
-        content.push(Symbol {
-            address: sym.st_value,
-            size: sym.st_size,
-            decompiled: false,
-            data: String::new(),
-        });
-    });
-
-    let app = App::new(file, name_list, content);
+    let app = App::new(file);
 
     enable_raw_mode()?;
     stdout().execute(EnterAlternateScreen)?;
