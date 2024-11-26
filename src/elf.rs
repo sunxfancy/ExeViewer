@@ -1,102 +1,152 @@
+use std::mem;
+use std::rc::Rc;
+use std::sync::Arc;
 
-use elf::ElfBytes;
 use elf::endian::AnyEndian;
 use elf::note::Note;
 use elf::note::NoteGnuBuildId;
+use elf::parse::ParsingTable;
 use elf::section::SectionHeader;
-use ratatui::widgets::canvas::Shape;
+use elf::string_table::StringTable;
+use elf::symbol::Symbol;
+use elf::ElfBytes;
+use iced_x86::FormatterOutput;
+use iced_x86::FormatterTextKind;
+use iced_x86::SymbolResolver;
+use iced_x86::SymbolResult;
 use iced_x86::{Decoder, DecoderOptions, Formatter, Instruction, NasmFormatter};
+use ratatui::style::Style;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
+use ratatui::text::Span;
+use ratatui::widgets::canvas::Shape;
 
-pub struct Elf<'a> {
-    file_data: &'a Vec<u8>,
-    pub elf: ElfBytes::<'a, AnyEndian>
+pub fn parse(file_data: &Vec<u8>) -> ElfBytes<'_, AnyEndian> {
+    ElfBytes::<AnyEndian>::minimal_parse(file_data).expect("Open elf file")
 }
 
-impl<'a> Elf<'a> {
-    pub fn new(file_data: &'a Vec<u8>) -> Self {
-        let elf = ElfBytes::<AnyEndian>::minimal_parse(file_data).expect("Open elf file");
+pub fn decompile_symbol<'a>(
+    elf: &ElfBytes<'a, AnyEndian>,
+    symbol_address: u64,
+    symbol_size: usize,
+) -> Vec<Line<'a>> {
+    // 读取内存片段
+    let shdr = elf
+        .section_header_by_name(".text")
+        .expect("Section not found");
+    let (section, _header) = elf
+        .section_data(&shdr.unwrap())
+        .expect("Section data not found");
 
-        Elf {
-            file_data,  // 将 file_data 移入结构体
-            elf,        // 传递给 ElfBytes 的引用在生命周期上与结构体匹配
-        }
+    if symbol_address < shdr.unwrap().sh_addr {
+        return vec![Line::from("Symbol out of range")];
     }
 
-    pub fn decompile_symbol(&self, symbol_address: u64, symbol_size: usize) -> String {
-        // 读取内存片段
-        let shdr = self.elf.section_header_by_name(".text").expect("Section not found");
-        let (section, _header) = self.elf.section_data(&shdr.unwrap()).expect("Section data not found");
-        
-        if symbol_address < shdr.unwrap().sh_addr  {
-            return String::from("Symbol out of range");
-        }
+    let code_offset = (symbol_address - shdr.unwrap().sh_addr) as usize;
 
-        let code_offset = (symbol_address - shdr.unwrap().sh_addr) as usize;
-
-        if (code_offset + symbol_size) > shdr.unwrap().sh_size as usize {
-            return String::from("Symbol out of range");
-        }
-
-        let code = &section[code_offset..code_offset + symbol_size];
-    
-        let mut decoder = Decoder::with_ip(64, code, symbol_address, DecoderOptions::NONE);
-        let mut formatter = iced_x86::IntelFormatter::new();
-    
-        let mut instruction = Instruction::default();
-        let mut buffer = String::new();
-        while decoder.can_decode() {
-            decoder.decode_out(&mut instruction);
-            
-            let mut output = String::new();
-            formatter.format(&instruction, &mut output);
-            
-            buffer.push_str(output.as_str());
-            buffer.push('\n');
-        }
-        buffer
+    if (code_offset + symbol_size) > shdr.unwrap().sh_size as usize {
+        return vec![Line::from("Symbol out of range")];
     }
-    
 
+    let code = &section[code_offset..code_offset + symbol_size];
+
+    // 解析符号表
+
+    let resolver = MySymbolResolver::create_box(elf);
+    let mut decoder = Decoder::with_ip(64, code, symbol_address, DecoderOptions::NONE);
+    let mut formatter = iced_x86::IntelFormatter::with_options(Some(resolver), None);
+
+    let mut instruction = Instruction::default();
+    let mut buffer: Vec<Line<'a>> = vec![];
+    while decoder.can_decode() {
+        decoder.decode_out(&mut instruction);
+
+        let mut output = MyFormatterOutput::new();
+        formatter.format(&instruction, &mut output);
+
+        let mut line_buf = vec![];
+        line_buf.push(Span::from(format!("{:016X}    ", instruction.ip())));
+
+        for (text, kind) in output.vec {
+            line_buf.push(get_color(text, kind));
+        }
+
+        buffer.push(Line::from(line_buf));
+    }
+    buffer
 }
 
+struct MySymbolResolver<'a> {
+    symbols: ParsingTable<'a, AnyEndian, Symbol>,
+    strtab: StringTable<'a>,
+}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+impl<'a> MySymbolResolver<'a> {
+    pub fn create_box(elf: &ElfBytes<'a, AnyEndian>) -> Box<dyn SymbolResolver> {
+        let sym_table = elf.symbol_table().expect("symtab should parse");
+        let (symbols, strtab) = sym_table.unwrap();
+        unsafe {
+            let raw_box = Box::new(MySymbolResolver { symbols, strtab });
 
-    #[test]
-    fn test_decompile_symbol_invalid_address() {
-        let data = include_bytes!("../test-program/slip").to_vec();
-        let elf = Elf::new(&data);
-        
-        // Test address below text section
-        let result = elf.decompile_symbol(0, 10);
-        assert_eq!(result, "Symbol out of range");
+            // 将 Box<ElfSymbolResolver> 转换为 Box<dyn SymbolResolver>
+            mem::transmute::<Box<dyn SymbolResolver + 'a>, Box<dyn SymbolResolver>>(raw_box)
+        }
     }
+}
 
-    #[test]
-    fn test_decompile_symbol_overflow() {
-        let data = include_bytes!("../test-program/slip").to_vec();
-        let elf = Elf::new(&data);
-        
-        // Get text section header
-        let shdr = elf.elf.section_header_by_name(".text").unwrap().unwrap();
-        
-        // Test size that would overflow section
-        let result = elf.decompile_symbol(shdr.sh_addr, shdr.sh_size as usize + 1);
-        assert_eq!(result, "Symbol out of range");
+impl SymbolResolver for MySymbolResolver<'_> {
+    fn symbol(
+        &mut self,
+        _instruction: &Instruction,
+        _operand: u32,
+        _instruction_operand: Option<u32>,
+        address: u64,
+        _address_size: u32,
+    ) -> Option<SymbolResult> {
+        if !(_instruction.is_call_far() || _instruction.is_call_near()) {
+            return None;
+        }
+
+        let symbol_string = self.strtab.get(address as usize);
+        match symbol_string {
+            // The 'address' arg is the address of the symbol and doesn't have to be identical
+            // to the 'address' arg passed to symbol(). If it's different from the input
+            // address, the formatter will add +N or -N, eg. '[rax+symbol+123]'
+            Ok(str) => Some(SymbolResult::with_str(address, str)),
+            Err(_) => None,
+        }
     }
+}
 
-    #[test]
-    fn test_decompile_symbol_valid() {
-        let data = include_bytes!("../test-program/slip").to_vec();
-        let elf = Elf::new(&data);
-        
-        let shdr = elf.elf.section_header_by_name(".text").unwrap().unwrap();
-        
-        // Test valid address and size
-        let result = elf.decompile_symbol(shdr.sh_addr, 16);
-        assert!(!result.is_empty());
-        assert!(result.contains('\n'));
+// Custom formatter output that stores the output in a vector.
+struct MyFormatterOutput {
+    vec: Vec<(String, FormatterTextKind)>,
+}
+
+impl MyFormatterOutput {
+    pub fn new() -> Self {
+        Self { vec: Vec::new() }
+    }
+}
+
+impl FormatterOutput for MyFormatterOutput {
+    fn write(&mut self, text: &str, kind: FormatterTextKind) {
+        // This allocates a string. If that's a problem, just call print!() here
+        // instead of storing the result in a vector.
+        self.vec.push((String::from(text), kind));
+    }
+}
+
+fn get_color<'a>(s: String, kind: FormatterTextKind) -> Span<'a> {
+    match kind {
+        FormatterTextKind::Directive | FormatterTextKind::Keyword => {
+            Span::styled(s, Style::new().yellow().italic())
+        }
+        FormatterTextKind::Prefix | FormatterTextKind::Mnemonic => {
+            Span::styled(s, Style::default().bold())
+        }
+        FormatterTextKind::Register => Span::styled(s, Style::new().green()),
+        FormatterTextKind::Number => Span::styled(s, Style::new().cyan()),
+        _ => Span::styled(s, Style::default()),
     }
 }

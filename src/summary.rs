@@ -71,9 +71,9 @@ impl Widget for &mut SummaryPage<'_> {
                 let section = &self.content[selected.unwrap()];
                 format!(
                     "\n\n\
-                    Description:  {}\n\n\
-                    Size:  {}\n\n\
-                    Range:  [ {} - {} ]\n\n",
+                    \x20       Description:  {}\n\n\
+                    \x20       Size:  {}\n\n\
+                    \x20       Range:  [ {:016X} - {:016X} ]\n\n",
                     section.description,
                     section.size,
                     section.offset,
@@ -81,7 +81,7 @@ impl Widget for &mut SummaryPage<'_> {
                 )
             }
         })
-        .block(Block::bordered().title("Assembly"));
+        .block(Block::bordered().title("Section Summary"));
 
         paragraph.render(layout[1], buf);
     }

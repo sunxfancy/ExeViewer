@@ -1,30 +1,33 @@
-use elf::{endian::AnyEndian, parse::ParsingTable, string_table::StringTable};
+use std::vec;
 
+use elf::{endian::AnyEndian, parse::ParsingTable, string_table::StringTable};
+use elf::ElfBytes;
+
+use ratatui::text::Line;
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     widgets::{Block, List, ListDirection, ListState, Paragraph, StatefulWidget, Widget},
 };
-
-use crate::Elf;
+use crate::elf::decompile_symbol;
 
 pub struct SymbolPage<'a> {
-    pub content: Vec<Symbol>,
+    pub content: Vec<Symbol<'a>>,
     pub list: List<'a>,
     pub state: ListState,
     pub active_on_content: bool,
 }
 
-pub struct Symbol {
+pub struct Symbol<'a> {
     address: u64,
     size: u64,
     decompiled: bool,
-    data: String,
+    data: Vec<Line<'a>>,
 }
 
-impl SymbolPage<'_> {
-    pub fn new<'a>(sym_tab: ParsingTable<'a, AnyEndian, elf::symbol::Symbol>, str_tab: StringTable<'a>) -> SymbolPage<'a> {
+impl <'a> SymbolPage<'a> {
+    pub fn new(sym_tab: ParsingTable<'a, AnyEndian, elf::symbol::Symbol>, str_tab: StringTable<'a>) -> SymbolPage<'a> {
         let mut name_list: Vec<&str> = Vec::new();
         let mut content: Vec<Symbol> = Vec::new();
         sym_tab.iter().for_each(|sym| {
@@ -34,7 +37,7 @@ impl SymbolPage<'_> {
                 address: sym.st_value,
                 size: sym.st_size,
                 decompiled: false,
-                data: String::new(),
+                data: vec![],
             });
         });
 
@@ -53,25 +56,25 @@ impl SymbolPage<'_> {
         }
     }
 
-    pub fn load_symbol(&mut self, file: &Elf, idx: usize) {
+    pub fn load_symbol(&mut self, elf: &ElfBytes::<'a, AnyEndian>, idx: usize) {
         if idx >= self.content.len() {
             return;
         }
         let symbol = &self.content[idx];
         if !symbol.decompiled {
-            let decompiled = file.decompile_symbol(symbol.address, symbol.size as usize);
+            let decompiled :Vec<Line<'a>> = decompile_symbol(elf, symbol.address, symbol.size as usize);
             self.content[idx].data = decompiled;
             self.content[idx].decompiled = true;
         }
     }
 
-    pub fn select_next(&mut self, elf_file: &Elf) {
+    pub fn select_next(&mut self, elf_file: &ElfBytes::<'a, AnyEndian>) {
         self.state.select_next();
         let idx: usize = self.state.selected().unwrap();
         self.load_symbol(elf_file, idx);
     }
 
-    pub fn select_previous(&mut self, elf_file: &Elf) {
+    pub fn select_previous(&mut self, elf_file: &ElfBytes::<'a, AnyEndian>) {
         self.state.select_previous();
         let idx: usize = self.state.selected().unwrap();
         self.load_symbol(elf_file, idx);
@@ -96,11 +99,11 @@ impl Widget for &mut SymbolPage<'_> {
         StatefulWidget::render(&self.list, layout[0], buf, &mut self.state);
         let selected = self.state.selected();
 
-        Paragraph::new(if selected.is_none() {
-            "Select a symbol to decompile"
+        if selected.is_none() {
+            Paragraph::new("Select a symbol to decompile")
         } else {
-            self.content[selected.unwrap()].data.as_str()
-        })
+            Paragraph::new(self.content[selected.unwrap()].data.clone())
+        }
         .block(Block::bordered().title("Assembly"))
         .render(layout[1], buf);
     }

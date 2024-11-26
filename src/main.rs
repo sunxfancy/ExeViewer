@@ -1,4 +1,6 @@
 use clap::Parser;
+use ::elf::endian::AnyEndian;
+use ::elf::ElfBytes;
 use ratatui::buffer::Buffer;
 use ratatui::style::palette::tailwind;
 use ratatui::symbols;
@@ -28,7 +30,6 @@ mod elf;
 mod summary;
 mod symbol;
 
-use elf::Elf;
 use summary::SummaryPage;
 use symbol::SymbolPage;
 
@@ -42,7 +43,7 @@ struct Args {
 
 struct App<'a> {
     should_quit: bool,
-    elf_file: Elf<'a>,
+    elf: ElfBytes::<'a, AnyEndian>,
     summary_page: SummaryPage<'a>,
     symbol_page: SymbolPage<'a>,
     selected_tab: AppTab,
@@ -61,20 +62,20 @@ enum AppTab {
     Tab4,
 }
 
-impl App<'_> {
-    fn new<'a>(elf_file: Elf<'a>) -> App<'a> {
-        let sectab = elf_file
-            .elf
-            .section_headers()
+impl <'a> App<'a> {
+    fn new(elf: ElfBytes::<'a, AnyEndian>) -> App<'a> {
+        let (sectab,secstr) = elf
+            .section_headers_with_strtab()
             .expect("sections should parse");
+
         // Find lazy-parsing types for the common ELF sections (we want .dynsym, .dynstr, .hash)
-        let symtable = elf_file.elf.symbol_table().expect("symtab should parse");
+        let symtable = elf.symbol_table().expect("symtab should parse");
         let (symtab, strtab) = symtable.unwrap();
 
         App {
             should_quit: false,
-            elf_file,
-            summary_page: SummaryPage::new(sectab, strtab),
+            elf,
+            summary_page: SummaryPage::new(sectab.expect("not found"), secstr.expect("not found")),
             symbol_page: SymbolPage::new(symtab, strtab),
             selected_tab: AppTab::Summary,
         }
@@ -129,7 +130,7 @@ impl App<'_> {
     fn select_next(&mut self) {
         match self.selected_tab {
             AppTab::Summary => self.summary_page.state.select_next(),
-            AppTab::Deassembly => self.symbol_page.select_next(&self.elf_file),
+            AppTab::Deassembly => self.symbol_page.select_next(&self.elf),
             AppTab::Tab3 => {}
             AppTab::Tab4 => {}
         }
@@ -138,7 +139,7 @@ impl App<'_> {
     fn select_previous(&mut self) {
         match self.selected_tab {
             AppTab::Summary => self.summary_page.state.select_previous(),
-            AppTab::Deassembly => self.symbol_page.select_previous(&self.elf_file),
+            AppTab::Deassembly => self.symbol_page.select_previous(&self.elf),
             AppTab::Tab3 => {}
             AppTab::Tab4 => {}
         }
@@ -240,8 +241,7 @@ impl AppTab {
 fn main() -> io::Result<()> {
     let args = Args::parse();
     let buffer = fs::read(&args.file).expect("file should read");
-    let file: Elf<'_> = Elf::new(&buffer);
-    let app = App::new(file);
+    let app = App::new(elf::parse(&buffer));
 
     enable_raw_mode()?;
     stdout().execute(EnterAlternateScreen)?;
