@@ -48,7 +48,7 @@ pub fn decompile_symbol<'a>(
         return vec![Line::from("Symbol out of range")];
     }
 
-    let code = &section[code_offset..code_offset + symbol_size];
+    let code: &[u8] = &section[code_offset..code_offset + symbol_size];
 
     // 解析符号表
 
