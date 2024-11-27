@@ -29,23 +29,24 @@ pub fn decompile_symbol<'a>(
     elf: &ElfBytes<'a, AnyEndian>,
     symbol_address: u64,
     symbol_size: usize,
+    section_name: &str,
 ) -> Vec<Line<'a>> {
     // 读取内存片段
     let shdr = elf
-        .section_header_by_name(".text")
+        .section_header_by_name(section_name)
         .expect("Section not found");
     let (section, _header) = elf
         .section_data(&shdr.unwrap())
         .expect("Section data not found");
 
     if symbol_address < shdr.unwrap().sh_addr {
-        return vec![Line::from("Symbol out of range")];
+        return vec![Line::from(format!("Symbol out of range: {:08X}", symbol_address))];
     }
 
     let code_offset = (symbol_address - shdr.unwrap().sh_addr) as usize;
 
     if (code_offset + symbol_size) > shdr.unwrap().sh_size as usize {
-        return vec![Line::from("Symbol out of range")];
+        return vec![Line::from(format!("Symbol out of range: {:08X}", symbol_address))];
     }
 
     let code: &[u8] = &section[code_offset..code_offset + symbol_size];
@@ -65,7 +66,7 @@ pub fn decompile_symbol<'a>(
         formatter.format(&instruction, &mut output);
 
         let mut line_buf = vec![];
-        line_buf.push(Span::from(format!("{:016X}    ", instruction.ip())));
+        line_buf.push(Span::from(format!("    {:016X}    ", instruction.ip())));
 
         for (text, kind) in output.vec {
             line_buf.push(get_color(text, kind));

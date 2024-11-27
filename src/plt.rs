@@ -1,60 +1,62 @@
-use std::vec;
-
-use elf::ElfBytes;
-use elf::{endian::AnyEndian, parse::ParsingTable, string_table::StringTable};
-
-use crate::elf::decompile_symbol;
-use ratatui::text::Line;
+use elf::{
+    endian::AnyEndian, parse::{ParsingIterator, ParsingTable}, relocation::Rela, section::SectionHeader, string_table::StringTable, symbol::SymbolTable, ElfBytes
+};
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
+    text::Line,
     widgets::{Block, List, ListDirection, ListState, Paragraph, StatefulWidget, Widget},
 };
 
-pub struct SymbolPage<'a> {
-    pub content: Vec<Symbol<'a>>,
+use crate::elf::decompile_symbol;
+
+pub struct PLTPage<'a> {
+    pub content: Vec<PLTItem<'a>>,
     pub list: List<'a>,
     pub state: ListState,
-    pub active_on_content: bool,
+    active_on_content: bool,
 }
 
-pub struct Symbol<'a> {
+pub struct PLTItem<'a> {
     address: u64,
     size: u64,
     decompiled: bool,
     data: Vec<Line<'a>>,
 }
 
-impl<'a> SymbolPage<'a> {
+impl<'a> PLTPage<'a> {
     pub fn new(
-        sym_tab: ParsingTable<'a, AnyEndian, elf::symbol::Symbol>,
+        rela: ParsingIterator<'a, AnyEndian, Rela>,
+        sym_tab: SymbolTable<'a, AnyEndian>,
         str_tab: StringTable<'a>,
-    ) -> SymbolPage<'a> {
-        let mut name_list: Vec<&str> = Vec::new();
-        let mut content: Vec<Symbol> = Vec::new();
-        sym_tab.iter().for_each(|sym| {
-            let name = str_tab.get(sym.st_name as usize).unwrap();
-            if sym.is_undefined() {
-                return;
-            }
-            name_list.push(name);
-            content.push(Symbol {
-                address: sym.st_value,
-                size: sym.st_size,
+        plt: SectionHeader,
+    ) -> PLTPage<'a> {
+        let name_list: Vec<&str> = rela
+            .map(|s| {
+                let sym = sym_tab.get(s.r_sym as usize).unwrap();
+                str_tab.get(sym.st_name as usize).unwrap()
+            })
+            .collect();
+        
+        let mut content: Vec<PLTItem<'_>> = vec![];
+        for i in 0..name_list.len() {
+            content.push(PLTItem {
+                address: plt.sh_addr + (i as u64 + 1) * plt.sh_entsize,
+                size: plt.sh_entsize,
                 decompiled: false,
                 data: vec![],
             });
-        });
+        }
 
         let list = List::new(name_list)
-            .block(Block::bordered().title("Symbols"))
+            .block(Block::bordered().title("Dynamic Symbols"))
             .highlight_style(Style::default().add_modifier(Modifier::ITALIC))
             .highlight_symbol(">> ")
             .repeat_highlight_symbol(true)
             .direction(ListDirection::TopToBottom);
-
-        SymbolPage {
+        
+        PLTPage {
             content,
             list,
             state: ListState::default(),
@@ -69,7 +71,7 @@ impl<'a> SymbolPage<'a> {
         let symbol = &self.content[idx];
         if !symbol.decompiled {
             let decompiled: Vec<Line<'a>> =
-                decompile_symbol(elf, symbol.address, symbol.size as usize, ".text");
+                decompile_symbol(elf, symbol.address, symbol.size as usize, ".plt");
             self.content[idx].data = decompiled;
             self.content[idx].decompiled = true;
         }
@@ -96,7 +98,7 @@ impl<'a> SymbolPage<'a> {
     }
 }
 
-impl Widget for &mut SymbolPage<'_> {
+impl Widget for &mut PLTPage<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let layout = Layout::default()
             .direction(Direction::Horizontal)
@@ -104,14 +106,14 @@ impl Widget for &mut SymbolPage<'_> {
             .split(area);
 
         StatefulWidget::render(&self.list, layout[0], buf, &mut self.state);
-        let selected = self.state.selected();
 
+        let selected = self.state.selected();
         if selected.is_none() {
             Paragraph::new("Select a symbol to decompile")
         } else {
             Paragraph::new(self.content[selected.unwrap()].data.clone())
         }
-        .block(Block::bordered().title("Assembly"))
+        .block(Block::bordered().title("PLT Table"))
         .render(layout[1], buf);
     }
 }

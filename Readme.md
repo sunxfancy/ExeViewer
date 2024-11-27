@@ -8,8 +8,7 @@ It's written in rust and uses the `elf` crate to parse the executable file.
 
 - View the section headers of the executable file.
 - Disassemble the text section of the executable file.
-- View PLT & GOT table
-- View rpaths 
+- View PLT table
 
 
 ## Build

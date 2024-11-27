@@ -29,9 +29,11 @@ use strum::{Display, EnumIter, FromRepr, IntoEnumIterator};
 mod elf;
 mod summary;
 mod symbol;
+mod plt;
 
 use summary::SummaryPage;
 use symbol::SymbolPage;
+use plt::PLTPage;
 
 /// Simple program to greet a person
 #[derive(Parser)]
@@ -46,6 +48,7 @@ struct App<'a> {
     elf: ElfBytes::<'a, AnyEndian>,
     summary_page: SummaryPage<'a>,
     symbol_page: SymbolPage<'a>,
+    plt_page: PLTPage<'a>,
     selected_tab: AppTab,
 }
 
@@ -56,10 +59,8 @@ enum AppTab {
     Summary,
     #[strum(to_string = "Deassembly")]
     Deassembly,
-    #[strum(to_string = "Tab 3")]
-    Tab3,
-    #[strum(to_string = "Tab 4")]
-    Tab4,
+    #[strum(to_string = "Dynamic Symbols & PLT")]
+    PLT,
 }
 
 impl <'a> App<'a> {
@@ -72,11 +73,21 @@ impl <'a> App<'a> {
         let symtable = elf.symbol_table().expect("symtab should parse");
         let (symtab, strtab) = symtable.unwrap();
 
+        // Find the dynamic symbol table and string table
+        let dynsymtab = elf.dynamic_symbol_table().expect("dynsym should parse");
+        let (dysymtab, dystrtab) = dynsymtab.unwrap();
+        
+        let rela_plt = elf.section_header_by_name(".rela.plt").expect("not found");
+        let rela = elf.section_data_as_relas(&rela_plt.unwrap()).expect("rela should parse");
+
+        let plt = elf.section_header_by_name(".plt").expect("not found").unwrap();
+
         App {
             should_quit: false,
             elf,
             summary_page: SummaryPage::new(sectab.expect("not found"), secstr.expect("not found")),
             symbol_page: SymbolPage::new(symtab, strtab),
+            plt_page: PLTPage::new(rela, dysymtab, dystrtab, plt),
             selected_tab: AppTab::Summary,
         }
     }
@@ -114,10 +125,7 @@ impl <'a> App<'a> {
                             self.selected_tab = AppTab::Deassembly;
                         }
                         KeyCode::Char('3') => {
-                            self.selected_tab = AppTab::Tab3;
-                        }
-                        KeyCode::Char('4') => {
-                            self.selected_tab = AppTab::Tab4;
+                            self.selected_tab = AppTab::PLT;
                         }
                         _ => {}
                     }
@@ -131,8 +139,7 @@ impl <'a> App<'a> {
         match self.selected_tab {
             AppTab::Summary => self.summary_page.state.select_next(),
             AppTab::Deassembly => self.symbol_page.select_next(&self.elf),
-            AppTab::Tab3 => {}
-            AppTab::Tab4 => {}
+            AppTab::PLT => self.plt_page.select_next(&self.elf),
         }
     }
 
@@ -140,8 +147,7 @@ impl <'a> App<'a> {
         match self.selected_tab {
             AppTab::Summary => self.summary_page.state.select_previous(),
             AppTab::Deassembly => self.symbol_page.select_previous(&self.elf),
-            AppTab::Tab3 => {}
-            AppTab::Tab4 => {}
+            AppTab::PLT => self.plt_page.select_previous(&self.elf),
         }
     }
 
@@ -149,8 +155,7 @@ impl <'a> App<'a> {
         match self.selected_tab {
             AppTab::Summary => {}
             AppTab::Deassembly => self.symbol_page.select_left(),
-            AppTab::Tab3 => {}
-            AppTab::Tab4 => {}
+            AppTab::PLT => self.plt_page.select_left(),
         }
     }
 
@@ -158,8 +163,7 @@ impl <'a> App<'a> {
         match self.selected_tab {
             AppTab::Summary => {}
             AppTab::Deassembly => self.symbol_page.select_right(),
-            AppTab::Tab3 => {}
-            AppTab::Tab4 => {}
+            AppTab::PLT => self.plt_page.select_right(),
         }
     }
 
@@ -179,8 +183,7 @@ impl <'a> App<'a> {
         match self.selected_tab {
             AppTab::Summary => (&mut self.summary_page).render(area, buf),
             AppTab::Deassembly => (&mut self.symbol_page).render(area, buf),
-            AppTab::Tab3 => {}
-            AppTab::Tab4 => {}
+            AppTab::PLT => (&mut self.plt_page).render(area, buf),
         }
     }
 }
@@ -232,8 +235,8 @@ impl AppTab {
         match self {
             Self::Summary => tailwind::BLUE,
             Self::Deassembly => tailwind::EMERALD,
-            Self::Tab3 => tailwind::INDIGO,
-            Self::Tab4 => tailwind::RED,
+            Self::PLT => tailwind::INDIGO,
+            // Self::Notes => tailwind::RED,
         }
     }
 }
