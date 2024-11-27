@@ -202,7 +202,7 @@ impl Widget for &mut App<'_> {
         }
 
         fn render_footer(area: Rect, buf: &mut Buffer) {
-            Line::raw("1, 2, 3, 4 select tabs |  ◄ ► to move between components | Press q to quit")
+            Line::raw("1, 2, 3 select tabs |  ◄ ► to move between components | Press q to quit")
                 .centered()
                 .render(area, buf);
         }
