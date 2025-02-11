@@ -30,10 +30,12 @@ mod elf;
 mod summary;
 mod symbol;
 mod plt;
+mod deps;
 
 use summary::SummaryPage;
 use symbol::SymbolPage;
 use plt::PLTPage;
+use deps::DependenciesPage;
 
 /// Simple program to greet a person
 #[derive(Parser)]
@@ -49,6 +51,7 @@ struct App<'a> {
     summary_page: SummaryPage<'a>,
     symbol_page: SymbolPage<'a>,
     plt_page: PLTPage<'a>,
+    deps_page: DependenciesPage<'a>,
     selected_tab: AppTab,
 }
 
@@ -61,6 +64,8 @@ enum AppTab {
     Deassembly,
     #[strum(to_string = "Dynamic Symbols & PLT")]
     PLT,
+    #[strum(to_string = "Dependencies")]
+    Dependencies,
 }
 
 impl <'a> App<'a> {
@@ -82,12 +87,15 @@ impl <'a> App<'a> {
 
         let plt = elf.section_header_by_name(".plt").expect("not found").unwrap();
 
+        let dynamic = elf.dynamic().ok().flatten();
+
         App {
             should_quit: false,
             elf,
             summary_page: SummaryPage::new(sectab.expect("not found"), secstr.expect("not found")),
             symbol_page: SymbolPage::new(symtab, strtab),
             plt_page: PLTPage::new(rela, dysymtab, dystrtab, plt),
+            deps_page: DependenciesPage::new(dynamic, Some(dystrtab)),
             selected_tab: AppTab::Summary,
         }
     }
@@ -127,6 +135,9 @@ impl <'a> App<'a> {
                         KeyCode::Char('3') => {
                             self.selected_tab = AppTab::PLT;
                         }
+                        KeyCode::Char('4') => {
+                            self.selected_tab = AppTab::Dependencies;
+                        }
                         _ => {}
                     }
                 }
@@ -140,6 +151,7 @@ impl <'a> App<'a> {
             AppTab::Summary => self.summary_page.state.select_next(),
             AppTab::Deassembly => self.symbol_page.select_next(&self.elf),
             AppTab::PLT => self.plt_page.select_next(&self.elf),
+            AppTab::Dependencies => self.deps_page.state.select_next(),
         }
     }
 
@@ -148,6 +160,7 @@ impl <'a> App<'a> {
             AppTab::Summary => self.summary_page.state.select_previous(),
             AppTab::Deassembly => self.symbol_page.select_previous(&self.elf),
             AppTab::PLT => self.plt_page.select_previous(&self.elf),
+            AppTab::Dependencies => self.deps_page.state.select_previous(),
         }
     }
 
@@ -156,6 +169,7 @@ impl <'a> App<'a> {
             AppTab::Summary => {}
             AppTab::Deassembly => self.symbol_page.select_left(),
             AppTab::PLT => self.plt_page.select_left(),
+            AppTab::Dependencies => {}
         }
     }
 
@@ -164,6 +178,7 @@ impl <'a> App<'a> {
             AppTab::Summary => {}
             AppTab::Deassembly => self.symbol_page.select_right(),
             AppTab::PLT => self.plt_page.select_right(),
+            AppTab::Dependencies => {}
         }
     }
 
@@ -184,6 +199,7 @@ impl <'a> App<'a> {
             AppTab::Summary => (&mut self.summary_page).render(area, buf),
             AppTab::Deassembly => (&mut self.symbol_page).render(area, buf),
             AppTab::PLT => (&mut self.plt_page).render(area, buf),
+            AppTab::Dependencies => (&mut self.deps_page).render(area, buf),
         }
     }
 }
@@ -202,7 +218,7 @@ impl Widget for &mut App<'_> {
         }
 
         fn render_footer(area: Rect, buf: &mut Buffer) {
-            Line::raw("1, 2, 3 select tabs |  ◄ ► to move between components | Press q to quit")
+            Line::raw("1, 2, 3, 4 select tabs |  ◄ ► to move between components | Press q to quit")
                 .centered()
                 .render(area, buf);
         }
@@ -236,7 +252,7 @@ impl AppTab {
             Self::Summary => tailwind::BLUE,
             Self::Deassembly => tailwind::EMERALD,
             Self::PLT => tailwind::INDIGO,
-            // Self::Notes => tailwind::RED,
+            Self::Dependencies => tailwind::AMBER,
         }
     }
 }
