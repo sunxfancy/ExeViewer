@@ -1,19 +1,19 @@
-use clap::Parser;
 use ::elf::endian::AnyEndian;
 use ::elf::ElfBytes;
+use clap::Parser;
 use ratatui::buffer::Buffer;
 use ratatui::style::palette::tailwind;
 use ratatui::symbols;
 use ratatui::text::Line;
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{self, stdout};
-use std::iter::Sum;
 use std::path::PathBuf;
 
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::prelude::Backend;
-use ratatui::style::{Color, Modifier, Style, Stylize};
-use ratatui::widgets::{ListState, Padding, StatefulWidget, Tabs, Widget};
+use ratatui::style::{Color,  Stylize};
+use ratatui::widgets::{ Padding, Tabs, Widget};
 use ratatui::{
     backend::CrosstermBackend,
     crossterm::{
@@ -21,21 +21,23 @@ use ratatui::{
         terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
         ExecutableCommand,
     },
-    widgets::{Block, List, ListDirection, Paragraph},
-    Frame, Terminal,
+    widgets::Block,
+     Terminal,
 };
 use strum::{Display, EnumIter, FromRepr, IntoEnumIterator};
 
+mod deps;
 mod elf;
+mod plt;
+mod section;
 mod summary;
 mod symbol;
-mod plt;
-mod deps;
 
+use deps::DependenciesPage;
+use plt::PLTPage;
+use section::SectionPage;
 use summary::SummaryPage;
 use symbol::SymbolPage;
-use plt::PLTPage;
-use deps::DependenciesPage;
 
 /// Simple program to greet a person
 #[derive(Parser)]
@@ -47,8 +49,9 @@ struct Args {
 
 struct App<'a> {
     should_quit: bool,
-    elf: ElfBytes::<'a, AnyEndian>,
-    summary_page: SummaryPage<'a>,
+    elf: ElfBytes<'a, AnyEndian>,
+    summary_page: SummaryPage,
+    section_page: SectionPage<'a>,
     symbol_page: SymbolPage<'a>,
     plt_page: PLTPage<'a>,
     deps_page: DependenciesPage<'a>,
@@ -60,6 +63,8 @@ enum AppTab {
     #[default]
     #[strum(to_string = "Summary")]
     Summary,
+    #[strum(to_string = "Sections")]
+    Sections,
     #[strum(to_string = "Deassembly")]
     Deassembly,
     #[strum(to_string = "Dynamic Symbols & PLT")]
@@ -68,9 +73,19 @@ enum AppTab {
     Dependencies,
 }
 
-impl <'a> App<'a> {
-    fn new(elf: ElfBytes::<'a, AnyEndian>) -> App<'a> {
-        let (sectab,secstr) = elf
+impl<'a> App<'a> {
+    fn new(path: &PathBuf, file_hash: String, elf: ElfBytes<'a, AnyEndian>) -> App<'a> {
+        let metadata = std::fs::metadata(path).expect("Failed to get file metadata");
+
+        // Get compiler info from .comment section
+        let compiler_info = elf
+            .section_header_by_name(".comment")
+            .ok()
+            .flatten()
+            .and_then(|header| elf.section_data(&header).ok())
+            .and_then(|(data, _)| String::from_utf8(data.to_vec()).ok());
+
+        let (sectab, secstr) = elf
             .section_headers_with_strtab()
             .expect("sections should parse");
 
@@ -81,18 +96,31 @@ impl <'a> App<'a> {
         // Find the dynamic symbol table and string table
         let dynsymtab = elf.dynamic_symbol_table().expect("dynsym should parse");
         let (dysymtab, dystrtab) = dynsymtab.unwrap();
-        
-        let rela_plt = elf.section_header_by_name(".rela.plt").expect("not found");
-        let rela = elf.section_data_as_relas(&rela_plt.unwrap()).expect("rela should parse");
 
-        let plt = elf.section_header_by_name(".plt").expect("not found").unwrap();
+        let rela_plt = elf.section_header_by_name(".rela.plt").expect("not found");
+        let rela = elf
+            .section_data_as_relas(&rela_plt.unwrap())
+            .expect("rela should parse");
+
+        let plt = elf
+            .section_header_by_name(".plt")
+            .expect("not found")
+            .unwrap();
 
         let dynamic = elf.dynamic().ok().flatten();
+        let elf_header = elf.ehdr.clone();
 
         App {
             should_quit: false,
             elf,
-            summary_page: SummaryPage::new(sectab.expect("not found"), secstr.expect("not found")),
+            summary_page: SummaryPage::new(
+                path.clone(),
+                metadata,
+                file_hash,
+                elf_header,
+                compiler_info,
+            ),
+            section_page: SectionPage::new(sectab.expect("not found"), secstr.expect("not found")),
             symbol_page: SymbolPage::new(symtab, strtab),
             plt_page: PLTPage::new(rela, dysymtab, dystrtab, plt),
             deps_page: DependenciesPage::new(dynamic, Some(dystrtab)),
@@ -130,12 +158,15 @@ impl <'a> App<'a> {
                             self.selected_tab = AppTab::Summary;
                         }
                         KeyCode::Char('2') => {
-                            self.selected_tab = AppTab::Deassembly;
+                            self.selected_tab = AppTab::Sections;
                         }
                         KeyCode::Char('3') => {
-                            self.selected_tab = AppTab::PLT;
+                            self.selected_tab = AppTab::Deassembly;
                         }
                         KeyCode::Char('4') => {
+                            self.selected_tab = AppTab::PLT;
+                        }
+                        KeyCode::Char('5') => {
                             self.selected_tab = AppTab::Dependencies;
                         }
                         _ => {}
@@ -148,7 +179,8 @@ impl <'a> App<'a> {
 
     fn select_next(&mut self) {
         match self.selected_tab {
-            AppTab::Summary => self.summary_page.state.select_next(),
+            AppTab::Summary => {}
+            AppTab::Sections => self.section_page.state.select_next(),
             AppTab::Deassembly => self.symbol_page.select_next(&self.elf),
             AppTab::PLT => self.plt_page.select_next(&self.elf),
             AppTab::Dependencies => self.deps_page.state.select_next(),
@@ -157,7 +189,8 @@ impl <'a> App<'a> {
 
     fn select_previous(&mut self) {
         match self.selected_tab {
-            AppTab::Summary => self.summary_page.state.select_previous(),
+            AppTab::Summary => {}
+            AppTab::Sections => self.section_page.state.select_previous(),
             AppTab::Deassembly => self.symbol_page.select_previous(&self.elf),
             AppTab::PLT => self.plt_page.select_previous(&self.elf),
             AppTab::Dependencies => self.deps_page.state.select_previous(),
@@ -167,6 +200,7 @@ impl <'a> App<'a> {
     fn select_left(&mut self) {
         match self.selected_tab {
             AppTab::Summary => {}
+            AppTab::Sections => {}
             AppTab::Deassembly => self.symbol_page.select_left(),
             AppTab::PLT => self.plt_page.select_left(),
             AppTab::Dependencies => {}
@@ -176,6 +210,7 @@ impl <'a> App<'a> {
     fn select_right(&mut self) {
         match self.selected_tab {
             AppTab::Summary => {}
+            AppTab::Sections => {}
             AppTab::Deassembly => self.symbol_page.select_right(),
             AppTab::PLT => self.plt_page.select_right(),
             AppTab::Dependencies => {}
@@ -196,7 +231,8 @@ impl <'a> App<'a> {
 
     fn render_pages(&mut self, area: Rect, buf: &mut Buffer) {
         match self.selected_tab {
-            AppTab::Summary => (&mut self.summary_page).render(area, buf),
+            AppTab::Summary => (&self.summary_page).render(area, buf),
+            AppTab::Sections => (&mut self.section_page).render(area, buf),
             AppTab::Deassembly => (&mut self.symbol_page).render(area, buf),
             AppTab::PLT => (&mut self.plt_page).render(area, buf),
             AppTab::Dependencies => (&mut self.deps_page).render(area, buf),
@@ -250,9 +286,10 @@ impl AppTab {
     const fn palette(self) -> tailwind::Palette {
         match self {
             Self::Summary => tailwind::BLUE,
-            Self::Deassembly => tailwind::EMERALD,
-            Self::PLT => tailwind::INDIGO,
-            Self::Dependencies => tailwind::AMBER,
+            Self::Sections => tailwind::EMERALD,
+            Self::Deassembly => tailwind::INDIGO,
+            Self::PLT => tailwind::AMBER,
+            Self::Dependencies => tailwind::PURPLE,
         }
     }
 }
@@ -260,7 +297,18 @@ impl AppTab {
 fn main() -> io::Result<()> {
     let args = Args::parse();
     let buffer = fs::read(&args.file).expect("file should read");
-    let app = App::new(elf::parse(&buffer));
+
+    let file_hash = {
+        let mut hasher = Sha256::new();
+        hasher.update(&buffer);
+        format!("{:X}", hasher.finalize())
+    };
+
+    let app = App::new(
+        &args.file,
+        file_hash,
+        elf::parse(&buffer),
+    );
 
     enable_raw_mode()?;
     stdout().execute(EnterAlternateScreen)?;

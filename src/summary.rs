@@ -1,101 +1,148 @@
-use elf::{endian::AnyEndian, parse::ParsingTable, string_table::StringTable};
+use std::{fs::Metadata, path::PathBuf, time::SystemTime};
+
+use elf::{endian::AnyEndian, file::FileHeader};
 use ratatui::{
     buffer::Buffer,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Modifier, Style},
-    widgets::{Block, List, ListState, Paragraph, StatefulWidget, Widget},
+    text::{Line, Span},
+    widgets::{Block, Paragraph, Widget},
 };
 
-pub struct SummaryPage<'a> {
-    pub content: Vec<Section>,
-    pub list: List<'a>,
-    pub state: ListState,
+pub struct SummaryPage {
+    file_name: String,
+    file_size: u64,
+    file_modified: SystemTime,
+    file_hash: String,
+    elf_header: FileHeader<AnyEndian>,
+    compiler_info: Option<String>,
 }
 
-pub struct Section {
-    offset: u64,
-    size: u64,
-    description: String,
-    data: String,
-}
-
-impl SummaryPage<'_> {
-    pub fn new<'a>(
-        sec_tab: ParsingTable<'a, AnyEndian, elf::section::SectionHeader>,
-        str_tab: StringTable<'a>,
-    ) -> SummaryPage<'a> {
-        let name_list: Vec<&str> = sec_tab
-            .iter()
-            .map(|s| str_tab.get(s.sh_name as usize).unwrap())
-            .collect();
-        let list = List::new(name_list)
-            .block(Block::bordered().title("Sections"))
-            .highlight_style(Style::default().add_modifier(Modifier::ITALIC))
-            .highlight_symbol(">>")
-            .repeat_highlight_symbol(true);
-
-        let content = sec_tab
-            .iter()
-            .map(|s| Section {
-                offset: s.sh_offset,
-                size: s.sh_size,
-                description: getDescription(str_tab.get(s.sh_name as usize).unwrap()),
-                data: String::new(),
-            })
-            .collect();
-
+impl SummaryPage {
+    pub fn new(
+        path: PathBuf,
+        metadata: Metadata,
+        file_hash: String,
+        elf_header: FileHeader<AnyEndian>,
+        compiler_info: Option<String>,
+    ) -> SummaryPage {
         SummaryPage {
-            content,
-            list,
-            state: ListState::default(),
+            file_name: path.file_name().unwrap().to_string_lossy().into_owned(),
+            file_size: metadata.len(),
+            file_modified: metadata.modified().unwrap(),
+            file_hash,
+            elf_header,
+            compiler_info,
+        }
+    }
+
+    fn get_machine_type(&self) -> &'static str {
+        match self.elf_header.e_machine {
+            0x3E => "x86-64",
+            0x28 => "ARM",
+            0xB7 => "AArch64",
+            0x02 => "SPARC",
+            0x03 => "x86",
+            0x08 => "MIPS",
+            0x14 => "PowerPC",
+            0x15 => "PowerPC64",
+            0x32 => "IA-64",
+            0x3E => "AMD64",
+            _ => "Unknown",
+        }
+    }
+
+    fn get_file_type(&self) -> &'static str {
+        match self.elf_header.e_type {
+            1 => "Relocatable",
+            2 => "Executable",
+            3 => "Shared object",
+            4 => "Core dump",
+            _ => "Unknown",
+        }
+    }
+
+    fn format_size(size: u64) -> String {
+        const KB: u64 = 1024;
+        const MB: u64 = KB * 1024;
+        const GB: u64 = MB * 1024;
+
+        if size >= GB {
+            format!("{:.2} GB", size as f64 / GB as f64)
+        } else if size >= MB {
+            format!("{:.2} MB", size as f64 / MB as f64)
+        } else if size >= KB {
+            format!("{:.2} KB", size as f64 / KB as f64)
+        } else {
+            format!("{} B", size)
         }
     }
 }
 
-impl Widget for &mut SummaryPage<'_> {
+impl Widget for &SummaryPage {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let layout = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints(vec![Constraint::Min(30), Constraint::Percentage(100)])
-            .split(area);
+        let lines = vec![
+            Line::from(vec![
+                Span::raw("File Name: "),
+                Span::styled(&self.file_name, Style::default().add_modifier(Modifier::BOLD)),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::raw("File Size: "),
+                Span::styled(
+                    SummaryPage::format_size(self.file_size),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Line::from(vec![
+                Span::raw("Last Modified: "),
+                Span::styled(
+                    humantime::format_rfc3339(self.file_modified).to_string(),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::raw("SHA-256: "),
+                Span::styled(&self.file_hash, Style::default().add_modifier(Modifier::BOLD)),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::raw("Architecture: "),
+                Span::styled(self.get_machine_type(), Style::default().add_modifier(Modifier::BOLD)),
+            ]),
+            Line::from(vec![
+                Span::raw("File Type: "),
+                Span::styled(self.get_file_type(), Style::default().add_modifier(Modifier::BOLD)),
+            ]),
+            Line::from(vec![
+                Span::raw("Entry Point: "),
+                Span::styled(
+                    format!("0x{:x}", self.elf_header.e_entry),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+            ]),
+        ];
 
-        StatefulWidget::render(&self.list, layout[0], buf, &mut self.state);
-        let selected = self.state.selected();
-
-        let paragraph = Paragraph::new(if selected.is_none() {
-            String::from("Select a section to show its details")
+        // Add compiler info if available
+        let lines = if let Some(compiler) = self.compiler_info.as_deref() {
+            [
+                lines,
+                vec![
+                    Line::from(""),
+                    Line::from(vec![
+                        Span::raw("Compiler Info: "),
+                        Span::styled(compiler, Style::default().add_modifier(Modifier::BOLD)),
+                    ]),
+                ],
+            ]
+            .concat()
         } else {
-            if selected.unwrap() >= self.content.len() {
-                String::from("Section not found")
-            } else {
-                let section = &self.content[selected.unwrap()];
-                format!(
-                    "\n\n\
-                    \x20       Description:  {}\n\n\
-                    \x20       Size:  {}\n\n\
-                    \x20       Range:  [ {:016X} - {:016X} ]\n\n",
-                    section.description,
-                    section.size,
-                    section.offset,
-                    section.offset + section.size
-                )
-            }
-        })
-        .block(Block::bordered().title("Section Summary"));
+            lines
+        };
 
-        paragraph.render(layout[1], buf);
-    }
-}
-
-fn getDescription(name: &str) -> String {
-    match name {
-        ".text" => "Executable code".to_string(),
-        ".rodata" => "Read-only data".to_string(),
-        ".data" => "Initialized data".to_string(),
-        ".bss" => "Uninitialized data".to_string(),
-        ".symtab" => "Symbol table".to_string(),
-        ".strtab" => "String table".to_string(),
-        ".shstrtab" => "Section header string table".to_string(),
-        _ => "Unknown".to_string(),
+        Paragraph::new(lines)
+            .block(Block::bordered().title("File Summary"))
+            .render(area, buf);
     }
 }

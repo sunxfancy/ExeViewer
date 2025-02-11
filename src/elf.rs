@@ -1,12 +1,7 @@
 use std::mem;
-use std::rc::Rc;
-use std::sync::Arc;
 
 use elf::endian::AnyEndian;
-use elf::note::Note;
-use elf::note::NoteGnuBuildId;
 use elf::parse::ParsingTable;
-use elf::section::SectionHeader;
 use elf::string_table::StringTable;
 use elf::symbol::Symbol;
 use elf::ElfBytes;
@@ -19,7 +14,6 @@ use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
-use ratatui::widgets::canvas::Shape;
 
 pub fn parse(file_data: &Vec<u8>) -> ElfBytes<'_, AnyEndian> {
     ElfBytes::<AnyEndian>::minimal_parse(file_data).expect("Open elf file")

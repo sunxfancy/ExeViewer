@@ -1,5 +1,5 @@
 use elf::{
-    dynamic::Dyn, endian::AnyEndian, parse::{ParsingIterator, ParsingTable}, string_table::StringTable, ElfBytes, abi
+    dynamic::Dyn, endian::AnyEndian, parse::ParsingTable, string_table::StringTable, abi
 };
 use ratatui::{
     buffer::Buffer,

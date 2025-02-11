@@ -9,6 +9,8 @@ elf = "0.7.4"
 iced-x86 = "1.21.0"
 ratatui = "0.28.1"
 strum = { version = "0.26", features = ["derive"] }
+sha2 = "0.10"
+humantime = "2.1"
 
 [profile.release]
 lto = true
