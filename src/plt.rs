@@ -19,10 +19,10 @@ pub struct PLTPage<'a> {
 }
 
 pub struct PLTItem<'a> {
-    address: u64,
-    size: u64,
-    decompiled: bool,
-    data: Vec<Line<'a>>,
+    address: u64, // 该项真实在内存中的地址
+    size: u64, // 大小
+    decompiled: bool, // 是否已反编译
+    data: Vec<Line<'a>>, // 反编译数据
 }
 
 impl<'a> PLTPage<'a> {

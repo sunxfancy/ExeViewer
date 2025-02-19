@@ -6,6 +6,7 @@ use ratatui::style::palette::tailwind;
 use ratatui::symbols;
 use ratatui::text::Line;
 use sha2::{Digest, Sha256};
+use std::env;
 use std::io::{self, stdout};
 use std::path::PathBuf;
 
@@ -301,6 +302,10 @@ impl AppTab {
 }
 
 fn main() -> io::Result<()> {
+    if env::var("RUST_LOG").is_ok() {
+    let _ = simple_logging::log_to_file("exeviewer.log", log::LevelFilter::Info);
+    }
+
     let args = Args::parse();
     let (file_path, buffer) = utils::find_executable(&args.file)?;
 

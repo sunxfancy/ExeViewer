@@ -1,9 +1,7 @@
+use std::collections::HashMap;
 use std::mem;
 
 use elf::endian::AnyEndian;
-use elf::parse::ParsingTable;
-use elf::string_table::StringTable;
-use elf::symbol::Symbol;
 use elf::ElfBytes;
 use iced_x86::FormatterOutput;
 use iced_x86::FormatterTextKind;
@@ -51,16 +49,9 @@ pub fn decompile_symbol<'a>(
 
     let code: &[u8] = &section[code_offset..code_offset + symbol_size];
     let mut decoder = Decoder::with_ip(64, code, symbol_address, DecoderOptions::NONE);
-
-    // 解析符号表
+    let resolver = MySymbolResolver::create_box(elf);
     let mut formatter: iced_x86::IntelFormatter =
-        match elf.symbol_table().expect("symbol table not found") {
-            Some((_, _)) => {
-                let resolver = MySymbolResolver::create_box(elf);
-                iced_x86::IntelFormatter::with_options(Some(resolver), None)
-            }
-            None => iced_x86::IntelFormatter::with_options(None, None),
-        };
+        iced_x86::IntelFormatter::with_options(Some(resolver), None);
 
     let mut instruction = Instruction::default();
     let mut buffer: Vec<Line<'a>> = vec![];
@@ -82,25 +73,57 @@ pub fn decompile_symbol<'a>(
     buffer
 }
 
-struct MySymbolResolver<'a> {
-    symbols: ParsingTable<'a, AnyEndian, Symbol>,
-    strtab: StringTable<'a>,
+struct MySymbolResolver {
+    addr_to_symbol: HashMap<u64, String>,
 }
 
-impl<'a> MySymbolResolver<'a> {
-    pub fn create_box(elf: &ElfBytes<'a, AnyEndian>) -> Box<dyn SymbolResolver> {
+impl MySymbolResolver {
+    pub fn new(elf: &ElfBytes<'_, AnyEndian>) -> MySymbolResolver {
+        let mut addr_to_symbol = HashMap::new();
+        // 解析符号表
         let sym_table = elf.symbol_table().expect("symtab should parse");
-        let (symbols, strtab) = sym_table.unwrap();
-        unsafe {
-            let raw_box = Box::new(MySymbolResolver { symbols, strtab });
+        match sym_table {
+            Some((symbols, strtab)) => {
+                for symbol in symbols.iter() {
+                    if let Ok(name) = strtab.get(symbol.st_name as usize) {
+                        addr_to_symbol.insert(symbol.st_value, name.to_string());
+                    }
+                }
+            }
+            None => {}
+        };
 
-            // 将 Box<ElfSymbolResolver> 转换为 Box<dyn SymbolResolver>
-            mem::transmute::<Box<dyn SymbolResolver + 'a>, Box<dyn SymbolResolver>>(raw_box)
+        // 解析PLT
+        if let Ok(Some(rela_plt)) = elf.section_header_by_name(".rela.plt") {
+            if let Ok((rela_data, _)) = elf.section_data(&rela_plt) {
+                if let Ok(Some(plt)) = elf.section_header_by_name(".plt") {
+                    let rela = elf.section_data_as_relas(&rela_plt).unwrap();
+                    let (dynsym, dynstr) = elf
+                        .dynamic_symbol_table()
+                        .expect("dynsym should parse")
+                        .unwrap();
+                    let _ = rela.enumerate().for_each(|(i, s)| {
+                        let sym = dynsym.get(s.r_sym as usize).unwrap();
+                        let name = dynstr.get(sym.st_name as usize).unwrap();
+
+                        addr_to_symbol.insert(
+                            plt.sh_addr + (i as u64 + 1) * plt.sh_entsize,
+                            format!("{}@plt", name),
+                        );
+                    });
+                }
+            }
         }
+
+        MySymbolResolver { addr_to_symbol }
+    }
+
+    pub fn create_box(elf: &ElfBytes<'_, AnyEndian>) -> Box<dyn SymbolResolver> {
+        Box::new(Self::new(elf))
     }
 }
 
-impl SymbolResolver for MySymbolResolver<'_> {
+impl SymbolResolver for MySymbolResolver {
     fn symbol(
         &mut self,
         _instruction: &Instruction,
@@ -113,14 +136,9 @@ impl SymbolResolver for MySymbolResolver<'_> {
             return None;
         }
 
-        let symbol_string = self.strtab.get(address as usize);
-        match symbol_string {
-            // The 'address' arg is the address of the symbol and doesn't have to be identical
-            // to the 'address' arg passed to symbol(). If it's different from the input
-            // address, the formatter will add +N or -N, eg. '[rax+symbol+123]'
-            Ok(str) => Some(SymbolResult::with_str(address, str)),
-            Err(_) => None,
-        }
+        self.addr_to_symbol
+            .get(&address)
+            .map(|name| SymbolResult::with_str(address, name.as_str()))
     }
 }
 

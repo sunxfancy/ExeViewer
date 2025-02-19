@@ -11,6 +11,8 @@ ratatui = "0.28.1"
 strum = { version = "0.26", features = ["derive"] }
 sha2 = "0.10"
 humantime = "2.1"
+simple-logging = "2.0.2"
+log = "0.4.25"
 
 [profile.release]
 lto = true
