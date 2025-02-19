@@ -34,22 +34,33 @@ pub fn decompile_symbol<'a>(
         .expect("Section data not found");
 
     if symbol_address < shdr.unwrap().sh_addr {
-        return vec![Line::from(format!("Symbol out of range: {:08X}", symbol_address))];
+        return vec![Line::from(format!(
+            "Symbol out of range: {:08X}",
+            symbol_address
+        ))];
     }
 
     let code_offset = (symbol_address - shdr.unwrap().sh_addr) as usize;
 
     if (code_offset + symbol_size) > shdr.unwrap().sh_size as usize {
-        return vec![Line::from(format!("Symbol out of range: {:08X}", symbol_address))];
+        return vec![Line::from(format!(
+            "Symbol out of range: {:08X}",
+            symbol_address
+        ))];
     }
 
     let code: &[u8] = &section[code_offset..code_offset + symbol_size];
+    let mut decoder = Decoder::with_ip(64, code, symbol_address, DecoderOptions::NONE);
 
     // 解析符号表
-
-    let resolver = MySymbolResolver::create_box(elf);
-    let mut decoder = Decoder::with_ip(64, code, symbol_address, DecoderOptions::NONE);
-    let mut formatter = iced_x86::IntelFormatter::with_options(Some(resolver), None);
+    let mut formatter: iced_x86::IntelFormatter =
+        match elf.symbol_table().expect("symbol table not found") {
+            Some((_, _)) => {
+                let resolver = MySymbolResolver::create_box(elf);
+                iced_x86::IntelFormatter::with_options(Some(resolver), None)
+            }
+            None => iced_x86::IntelFormatter::with_options(None, None),
+        };
 
     let mut instruction = Instruction::default();
     let mut buffer: Vec<Line<'a>> = vec![];

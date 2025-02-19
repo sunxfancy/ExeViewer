@@ -6,14 +6,13 @@ use ratatui::style::palette::tailwind;
 use ratatui::symbols;
 use ratatui::text::Line;
 use sha2::{Digest, Sha256};
-use std::fs;
 use std::io::{self, stdout};
 use std::path::PathBuf;
 
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::prelude::Backend;
-use ratatui::style::{Color,  Stylize};
-use ratatui::widgets::{ Padding, Tabs, Widget};
+use ratatui::style::{Color, Stylize};
+use ratatui::widgets::{Padding, Tabs, Widget};
 use ratatui::{
     backend::CrosstermBackend,
     crossterm::{
@@ -22,18 +21,21 @@ use ratatui::{
         ExecutableCommand,
     },
     widgets::Block,
-     Terminal,
+    Terminal,
 };
 use strum::{Display, EnumIter, FromRepr, IntoEnumIterator};
 
 mod deps;
 mod elf;
+mod empty;
 mod plt;
 mod section;
 mod summary;
 mod symbol;
+mod utils;
 
 use deps::DependenciesPage;
+use empty::{EmptyPage, Page};
 use plt::PLTPage;
 use section::SectionPage;
 use summary::SummaryPage;
@@ -52,7 +54,7 @@ struct App<'a> {
     elf: ElfBytes<'a, AnyEndian>,
     summary_page: SummaryPage,
     section_page: SectionPage<'a>,
-    symbol_page: SymbolPage<'a>,
+    symbol_page: Box<dyn Page<'a> + 'a>,
     plt_page: PLTPage<'a>,
     deps_page: DependenciesPage<'a>,
     selected_tab: AppTab,
@@ -91,7 +93,11 @@ impl<'a> App<'a> {
 
         // Find lazy-parsing types for the common ELF sections (we want .dynsym, .dynstr, .hash)
         let symtable = elf.symbol_table().expect("symtab should parse");
-        let (symtab, strtab) = symtable.unwrap();
+        let symbol_page: Box<dyn Page + 'a> = if let Some((symtab, strtab)) = symtable {
+            Box::new(SymbolPage::new(symtab, strtab))
+        } else {
+            Box::new(EmptyPage::new())
+        };
 
         // Find the dynamic symbol table and string table
         let dynsymtab = elf.dynamic_symbol_table().expect("dynsym should parse");
@@ -121,7 +127,7 @@ impl<'a> App<'a> {
                 compiler_info,
             ),
             section_page: SectionPage::new(sectab.expect("not found"), secstr.expect("not found")),
-            symbol_page: SymbolPage::new(symtab, strtab),
+            symbol_page,
             plt_page: PLTPage::new(rela, dysymtab, dystrtab, plt),
             deps_page: DependenciesPage::new(dynamic, Some(dystrtab)),
             selected_tab: AppTab::Summary,
@@ -233,7 +239,7 @@ impl<'a> App<'a> {
         match self.selected_tab {
             AppTab::Summary => (&self.summary_page).render(area, buf),
             AppTab::Sections => (&mut self.section_page).render(area, buf),
-            AppTab::Deassembly => (&mut self.symbol_page).render(area, buf),
+            AppTab::Deassembly => (&mut self.symbol_page).page_render(area, buf),
             AppTab::PLT => (&mut self.plt_page).render(area, buf),
             AppTab::Dependencies => (&mut self.deps_page).render(area, buf),
         }
@@ -296,7 +302,7 @@ impl AppTab {
 
 fn main() -> io::Result<()> {
     let args = Args::parse();
-    let buffer = fs::read(&args.file).expect("file should read");
+    let (file_path, buffer) = utils::find_executable(&args.file)?;
 
     let file_hash = {
         let mut hasher = Sha256::new();
@@ -304,11 +310,7 @@ fn main() -> io::Result<()> {
         format!("{:X}", hasher.finalize())
     };
 
-    let app = App::new(
-        &args.file,
-        file_hash,
-        elf::parse(&buffer),
-    );
+    let app = App::new(&file_path, file_hash, elf::parse(&buffer));
 
     enable_raw_mode()?;
     stdout().execute(EnterAlternateScreen)?;

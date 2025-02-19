@@ -5,6 +5,7 @@ use elf::{endian::AnyEndian, parse::ParsingTable, string_table::StringTable};
 use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
 
 use crate::elf::decompile_symbol;
+use crate::empty::Page;
 use ratatui::text::Line;
 use ratatui::{
     buffer::Buffer,
@@ -80,42 +81,10 @@ impl<'a> SymbolPage<'a> {
         }
     }
 
-    pub fn select_next(&mut self, elf_file: &ElfBytes<'a, AnyEndian>) {
-        if self.active_on_content {
-            let idx: usize = self.state.selected().unwrap();
-            self.content[idx].vertical_scroll = self.content[idx].vertical_scroll.saturating_add(1);
-            self.ScrollState = self.ScrollState.position(self.content[idx].vertical_scroll);
-        } else {
-            self.state.select_next();
-            let idx: usize = self.state.selected().unwrap();
-            self.load_symbol(elf_file, idx);
-            self.ScrollState = self.ScrollState.position(self.content[idx].vertical_scroll);
-        }
-    }
-
-    pub fn select_previous(&mut self, elf_file: &ElfBytes<'a, AnyEndian>) {
-        if self.active_on_content {
-            let idx: usize = self.state.selected().unwrap();
-            self.content[idx].vertical_scroll = self.content[idx].vertical_scroll.saturating_sub(1);
-            self.ScrollState = self.ScrollState.position(self.content[idx].vertical_scroll);
-        } else {
-            self.state.select_previous();
-            let idx: usize = self.state.selected().unwrap();
-            self.load_symbol(elf_file, idx);
-            self.ScrollState = self.ScrollState.position(self.content[idx].vertical_scroll);
-        }
-    }
-
-    pub fn select_left(&mut self) {
-        self.active_on_content = false;
-    }
-
-    pub fn select_right(&mut self) {
-        self.active_on_content = true;
-    }
+    
 }
 
-impl Widget for &mut SymbolPage<'_> {
+impl<'a> Widget for &mut SymbolPage<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let layout = Layout::default()
             .direction(Direction::Horizontal)
@@ -141,5 +110,45 @@ impl Widget for &mut SymbolPage<'_> {
             .begin_symbol(Some("▲"))
             .end_symbol(Some("▼"))
             .render(layout[1], buf, &mut self.ScrollState);
+    }
+}
+
+impl<'a> Page<'a> for SymbolPage<'a> {
+    fn page_render(&mut self, area: Rect, buf: &mut Buffer) {
+        self.render(area, buf);
+    }
+
+    fn select_next(&mut self, elf_file: &ElfBytes<'a, AnyEndian>) {
+        if self.active_on_content {
+            let idx: usize = self.state.selected().unwrap();
+            self.content[idx].vertical_scroll = self.content[idx].vertical_scroll.saturating_add(1);
+            self.ScrollState = self.ScrollState.position(self.content[idx].vertical_scroll);
+        } else {
+            self.state.select_next();
+            let idx: usize = self.state.selected().unwrap();
+            self.load_symbol(elf_file, idx);
+            self.ScrollState = self.ScrollState.position(self.content[idx].vertical_scroll);
+        }
+    }
+
+    fn select_previous(&mut self, elf_file: &ElfBytes<'a, AnyEndian>) {
+        if self.active_on_content {
+            let idx: usize = self.state.selected().unwrap();
+            self.content[idx].vertical_scroll = self.content[idx].vertical_scroll.saturating_sub(1);
+            self.ScrollState = self.ScrollState.position(self.content[idx].vertical_scroll);
+        } else {
+            self.state.select_previous();
+            let idx: usize = self.state.selected().unwrap();
+            self.load_symbol(elf_file, idx);
+            self.ScrollState = self.ScrollState.position(self.content[idx].vertical_scroll);
+        }
+    }
+
+    fn select_left(&mut self) {
+        self.active_on_content = false;
+    }
+
+    fn select_right(&mut self) {
+        self.active_on_content = true;
     }
 }
