@@ -16,6 +16,7 @@ pub struct SummaryPage {
     file_hash: String,
     elf_header: FileHeader<AnyEndian>,
     compiler_info: Option<String>,
+    interpreter: Option<String>,
 }
 
 impl SummaryPage {
@@ -25,6 +26,7 @@ impl SummaryPage {
         file_hash: String,
         elf_header: FileHeader<AnyEndian>,
         compiler_info: Option<String>,
+        interpreter: Option<String>,
     ) -> SummaryPage {
         SummaryPage {
             file_name: path.file_name().unwrap().to_string_lossy().into_owned(),
@@ -33,6 +35,7 @@ impl SummaryPage {
             file_hash,
             elf_header,
             compiler_info,
+            interpreter,
         }
     }
 
@@ -81,7 +84,7 @@ impl SummaryPage {
 
 impl Widget for &SummaryPage {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let lines = vec![
+        let mut lines = vec![
             Line::from(vec![
                 Span::raw("File Name: "),
                 Span::styled(&self.file_name, Style::default().add_modifier(Modifier::BOLD)),
@@ -124,22 +127,29 @@ impl Widget for &SummaryPage {
             ]),
         ];
 
+        // 添加动态链接器信息
+        if let Some(interp) = &self.interpreter {
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::raw("Dynamic Linker: "),
+                Span::styled(
+                    interp,
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+            ]));
+        }
+
         // Add compiler info if available
-        let lines = if let Some(compiler) = self.compiler_info.as_deref() {
-            [
-                lines,
-                vec![
-                    Line::from(""),
-                    Line::from(vec![
-                        Span::raw("Compiler Info: "),
-                        Span::styled(compiler, Style::default().add_modifier(Modifier::BOLD)),
-                    ]),
-                ],
-            ]
-            .concat()
-        } else {
-            lines
-        };
+        if let Some(compiler) = self.compiler_info.as_deref() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::raw("Compiler Info: "),
+                Span::styled(
+                    compiler,
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+            ]));
+        }
 
         Paragraph::new(lines)
             .block(Block::bordered().title("File Summary"))

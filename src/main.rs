@@ -116,6 +116,7 @@ impl<'a> App<'a> {
 
         let dynamic = elf.dynamic().ok().flatten();
         let elf_header = elf.ehdr.clone();
+        let interpreter = elf::get_interpreter(&elf);
 
         App {
             should_quit: false,
@@ -126,11 +127,17 @@ impl<'a> App<'a> {
                 file_hash,
                 elf_header,
                 compiler_info,
+                interpreter.clone(),
             ),
             section_page: SectionPage::new(sectab.expect("not found"), secstr.expect("not found")),
             symbol_page,
             plt_page: PLTPage::new(rela, dysymtab, dystrtab, plt),
-            deps_page: DependenciesPage::new(dynamic, Some(dystrtab)),
+            deps_page: DependenciesPage::new(
+                dynamic,
+                Some(dystrtab),
+                interpreter.as_deref(),
+                path.to_str().unwrap_or(""),
+            ),
             selected_tab: AppTab::Summary,
         }
     }

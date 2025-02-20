@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::mem;
+use std::path::Path;
 
 use elf::endian::AnyEndian;
+use elf::segment::ProgramHeader;
 use elf::ElfBytes;
 use iced_x86::FormatterOutput;
 use iced_x86::FormatterTextKind;
@@ -173,4 +175,18 @@ fn get_color<'a>(s: String, kind: FormatterTextKind) -> Span<'a> {
         FormatterTextKind::Number => Span::styled(s, Style::new().cyan()),
         _ => Span::styled(s, Style::default()),
     }
+}
+
+pub fn get_interpreter(elf: &ElfBytes<AnyEndian>) -> Option<String> {
+    // 遍历程序头表查找 PT_INTERP 段
+    for ph in elf.segments().unwrap() {
+        if ph.p_type == elf::abi::PT_INTERP {
+            // 读取 INTERP 段的数据
+            if let Ok(data) = elf.segment_data(&ph) {
+                // 去掉结尾的 null 字节并转换为字符串
+                return String::from_utf8(data[..data.len() - 1].to_vec()).ok();
+            }
+        }
+    }
+    None
 }

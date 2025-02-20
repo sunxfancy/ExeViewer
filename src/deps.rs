@@ -8,6 +8,9 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, List, ListDirection, ListState, Paragraph, StatefulWidget, Widget},
 };
+use std::collections::HashMap;
+use std::process::Command;
+use std::env::consts::{ARCH, OS};
 
 pub struct DependenciesPage<'a> {
     pub rpath: Option<String>,
@@ -20,15 +23,74 @@ pub struct DependencyEntry<'a> {
     pub name: &'a str,
     pub is_critical: bool,
     pub search_path: String,
+    pub actual_path: String,
 }
 
 impl<'a> DependenciesPage<'a> {
+    fn get_actual_library_paths(interpreter: Option<&str>, elf_path: &str) -> HashMap<String, String> {
+        let mut library_paths = HashMap::new();
+        
+        // 只在 Linux 系统上执行
+        if OS != "linux" {
+            return library_paths;
+        }
+
+        // 检查架构是否匹配
+        let current_arch = match ARCH {
+            "x86_64" => true,
+            _ => false,
+        };
+
+        if !current_arch {
+            return library_paths;
+        }
+        
+        // 使用实际的 ELF 文件路径
+        if let Some(interpreter) = interpreter {
+            if let Ok(output) = Command::new(interpreter)
+                .arg("--list")
+                .arg(elf_path)  // 使用实际的 ELF 文件路径
+                .output()
+            {
+                let output_str = String::from_utf8_lossy(&output.stdout);
+                log::info!("{}", output_str);
+                
+                for line in output_str.lines() {
+                    if line.contains("=>") {
+                        let parts: Vec<&str> = line.split("=>").collect();
+                        if parts.len() >= 2 {
+                            let lib_name = parts[0].trim().to_string();
+                            let lib_path = parts[1]
+                                .split('(')
+                                .next()
+                                .unwrap_or("")
+                                .trim()
+                                .to_string();
+                            
+                            if !lib_path.is_empty() {
+                                library_paths.insert(lib_name, lib_path);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        library_paths
+    }
+
     pub fn new(
         dynamic: Option<ParsingTable<'a, AnyEndian, Dyn>>,
         dynstr: Option<StringTable<'a>>,
+        interpreter: Option<&str>,
+        elf_path: &str,  // 新增参数
     ) -> DependenciesPage<'a> {
         let mut rpath = None;
         let mut needed = Vec::new();
+        
+        // 传入 ELF 文件路径
+        let actual_paths = Self::get_actual_library_paths(interpreter, elf_path);
+        let can_show_actual_paths = !actual_paths.is_empty();
 
         // Get dynamic section
         if let Some(dynamic) = dynamic {
@@ -47,10 +109,20 @@ impl<'a> DependenciesPage<'a> {
                     if entry.d_tag == abi::DT_NEEDED {
                         if let Ok(name) = dynstr.get(entry.d_val() as usize) {
                             let is_critical = Self::is_critical_library(name);
+                            let actual_path = if can_show_actual_paths {
+                                actual_paths
+                                    .get(name)
+                                    .cloned()
+                                    .unwrap_or_else(|| "Not found".to_string())
+                            } else {
+                                "Not available on current platform".to_string()
+                            };
+                            
                             needed.push(DependencyEntry {
                                 name,
                                 is_critical,
                                 search_path: Self::get_search_path(name, rpath.as_deref()),
+                                actual_path,
                             });
                         }
                     }
@@ -127,7 +199,7 @@ impl Widget for &mut DependenciesPage<'_> {
 
         let details = if let Some(selected) = self.state.selected() {
             let entry = &self.needed[selected];
-            vec![
+            let mut lines = vec![
                 Line::from(vec![
                     Span::raw("Library: "),
                     Span::styled(entry.name, Style::default().add_modifier(Modifier::BOLD)),
@@ -141,9 +213,29 @@ impl Widget for &mut DependenciesPage<'_> {
                     ),
                 ]),
                 Line::from(""),
-                Line::from("Search Path:"),
-                Line::from(entry.search_path.clone()),
-            ]
+                Line::from("Search Paths:"),
+            ];
+
+            // 将搜索路径按 : 分割并添加到行中
+            for path in entry.search_path.split(':') {
+                if !path.is_empty() {
+                    lines.push(Line::from(format!("  {}", path)));
+                }
+            }
+
+            // 只在 Linux 且架构匹配时显示实际路径
+            if OS == "linux" && ARCH == "x86_64" {
+                lines.extend_from_slice(&[
+                    Line::from(""),
+                    Line::from("Actual Path:"),
+                    Line::from(Span::styled(
+                        &entry.actual_path,
+                        Style::default().add_modifier(Modifier::BOLD),
+                    )),
+                ]);
+            }
+
+            lines
         } else {
             let mut lines = vec![
                 Line::from("RPATH:"),

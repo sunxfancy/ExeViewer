@@ -69,15 +69,18 @@ impl Widget for &mut SectionPage<'_> {
                 String::from("Section not found")
             } else {
                 let section = &self.content[selected.unwrap()];
+                let visualization = generate_section_visualization(&self.content, selected.unwrap(), 50, 3);
                 format!(
                     "\n\n\
                     \x20       Description:  {}\n\n\
                     \x20       Size:  {}\n\n\
-                    \x20       Range:  [ {:016X} - {:016X} ]\n\n",
+                    \x20       Range:  [ {:016X} - {:016X} ]\n\n\
+                    \x20       Layout:\n{}\n",
                     section.description,
                     section.size,
                     section.offset,
-                    section.offset + section.size
+                    section.offset + section.size,
+                    visualization
                 )
             }
         })
@@ -85,6 +88,39 @@ impl Widget for &mut SectionPage<'_> {
 
         paragraph.render(layout[1], buf);
     }
+}
+
+fn generate_section_visualization(sections: &[Section], selected_idx: usize, width: usize, height: usize) -> String {
+    let total_len = width * height;
+    let mut visualization = vec!['.'; total_len];
+    
+    if let Some(max_offset) = sections.iter().map(|s| s.offset + s.size).max() {
+        // 计算选中段在总长度中的起止位置
+        let section = &sections[selected_idx];
+        let start_pos = ((section.offset as f64 / max_offset as f64) * total_len as f64) as usize;
+        let mut end_pos = (((section.offset + section.size) as f64 / max_offset as f64) * total_len as f64) as usize;
+        
+        // 确保小段至少显示一个字符
+        if end_pos <= start_pos {
+            end_pos = start_pos + 1;
+        }
+        end_pos = end_pos.min(total_len);
+        
+        // 标记区间
+        for i in start_pos..end_pos {
+            visualization[i] = '*';
+        }
+    }
+    
+    // 按照指定宽度分行输出
+    (0..height)
+        .map(|row| {
+            let start = row * width;
+            let end = start + width;
+            format!("\x20       {}", visualization[start..end].iter().collect::<String>())
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn getDescription(name: &str) -> String {
