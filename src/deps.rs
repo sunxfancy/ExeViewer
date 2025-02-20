@@ -238,9 +238,6 @@ impl Widget for &mut DependenciesPage<'_> {
             lines
         } else {
             let mut lines = vec![
-                Line::from("RPATH:"),
-                Line::from(self.rpath.as_deref().unwrap_or("Not set")),
-                Line::from(""),
                 Line::from("Select a library to view details"),
                 Line::from(""),
                 Line::from("* Critical system libraries are marked with an asterisk"),

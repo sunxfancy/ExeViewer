@@ -14,7 +14,8 @@ It's written in rust and uses the `elf` crate to parse the executable file.
 ![1.png](./docs/1.png)
 ![2.png](./docs/2.png)
 ![3.png](./docs/3.png)
-
+![4.png](./docs/4.png)
+![5.png](./docs/5.png)
 
 ## Installation
 
