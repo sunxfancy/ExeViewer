@@ -7,7 +7,7 @@ use ratatui::symbols;
 use ratatui::text::Line;
 use sha2::{Digest, Sha256};
 use std::env;
-use std::io::{self, stdout};
+use std::io::{self, stdout, IsTerminal, Write};
 use std::path::PathBuf;
 
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -34,6 +34,7 @@ mod section;
 mod summary;
 mod symbol;
 mod utils;
+mod report;
 
 use deps::DependenciesPage;
 use empty::{EmptyPage, Page};
@@ -42,12 +43,18 @@ use section::SectionPage;
 use summary::SummaryPage;
 use symbol::SymbolPage;
 
-/// Simple program to greet a person
+/// Inspect Linux ELF files and their declared runtime requirements
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Args {
     /// Path of the executable file
     file: PathBuf,
+    /// Print a static text report without entering the interactive UI
+    #[arg(long, conflicts_with = "interactive")]
+    report: bool,
+    /// Explicitly use the interactive terminal UI
+    #[arg(long)]
+    interactive: bool,
 }
 
 struct App<'a> {
@@ -314,6 +321,17 @@ fn main() -> io::Result<()> {
     }
 
     let args = Args::parse();
+    let use_report = args.report || (!args.interactive && !stdout().is_terminal());
+    if use_report {
+        let result = report::render(&args.file)?;
+        return match stdout().lock().write_all(result.as_bytes()) {
+            Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+            other => other,
+        };
+    }
+    if !io::stdin().is_terminal() || !stdout().is_terminal() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Interactive mode requires a terminal; use --report"));
+    }
     let (file_path, buffer) = utils::find_executable(&args.file)?;
 
     let file_hash = {
