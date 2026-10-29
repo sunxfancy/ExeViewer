@@ -35,6 +35,7 @@ mod summary;
 mod symbol;
 mod utils;
 mod report;
+mod diagnose;
 
 use deps::DependenciesPage;
 use empty::{EmptyPage, Page};
@@ -47,8 +48,10 @@ use symbol::SymbolPage;
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Args {
+    #[command(subcommand)]
+    command: Option<diagnose::cli::Commands>,
     /// Path of the executable file
-    file: PathBuf,
+    file: Option<PathBuf>,
     /// Print a static text report without entering the interactive UI
     #[arg(long, conflicts_with = "interactive")]
     report: bool,
@@ -321,9 +324,20 @@ fn main() -> io::Result<()> {
     }
 
     let args = Args::parse();
+    if let Some(command) = args.command {
+        if args.report || args.interactive || args.file.is_some() {
+            eprintln!("Legacy viewer options cannot be combined with subcommands");
+            std::process::exit(2);
+        }
+        std::process::exit(diagnose::cli::run(command));
+    }
+    let Some(file) = args.file else {
+        eprintln!("Provide an ELF file or a subcommand; see --help");
+        std::process::exit(2);
+    };
     let use_report = args.report || (!args.interactive && !stdout().is_terminal());
     if use_report {
-        let result = report::render(&args.file)?;
+        let result = report::render(&file)?;
         return match stdout().lock().write_all(result.as_bytes()) {
             Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Ok(()),
             other => other,
@@ -332,7 +346,7 @@ fn main() -> io::Result<()> {
     if !io::stdin().is_terminal() || !stdout().is_terminal() {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "Interactive mode requires a terminal; use --report"));
     }
-    let (file_path, buffer) = utils::find_executable(&args.file)?;
+    let (file_path, buffer) = utils::find_executable(&file)?;
 
     let file_hash = {
         let mut hasher = Sha256::new();
