@@ -33,6 +33,9 @@ pub enum Commands {
         env_a: PathBuf,
         #[arg(long)]
         env_b: PathBuf,
+        /// Link dependency differences to new failures using saved evidence
+        #[arg(long)]
+        explain: bool,
         #[arg(long, value_enum, default_value = "text")]
         format: Format,
     },
@@ -169,6 +172,7 @@ fn execute(command: Commands) -> Result<i32, String> {
         Commands::Compare {
             env_a,
             env_b,
+            explain,
             format,
         } => {
             let read = |p: PathBuf| -> Result<Report, String> {
@@ -235,7 +239,7 @@ fn execute(command: Commands) -> Result<i32, String> {
             } else {
                 0
             };
-            let value = serde_json::json!({"schema_version":1,"kind":"comparison","artifact_sha256":first_a.elf.sha256,"status_a":a.status,"status_b":b.status,"changes":changes,"diagnostics_a":a.diagnostics,"diagnostics_b":b.diagnostics,"environment_a":a.environment,"environment_b":b.environment,"limitations":["Compares saved observations, not current filesystem contents. Changes include search evidence, selected paths and library content hashes."]});
+            let value = serde_json::json!({"schema_version":1,"kind":"comparison","explanation":if explain {super::explain::explain(&a,&b)} else {serde_json::Value::Null},"artifact_sha256":first_a.elf.sha256,"status_a":a.status,"status_b":b.status,"changes":changes,"diagnostics_a":a.diagnostics,"diagnostics_b":b.diagnostics,"environment_a":a.environment,"environment_b":b.environment,"limitations":["Compares saved observations, not current filesystem contents. Changes include search evidence, selected paths and library content hashes."]});
             output(
                 &if matches!(format, Format::Json) {
                     json(&value)?

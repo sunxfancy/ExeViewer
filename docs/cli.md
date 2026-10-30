@@ -143,3 +143,13 @@ IFUNC 最终实现地址或独立命名空间。依赖不完整、GNU_UNIQUE、D
 `trace --baseline diagnosis.json` 的 `comparison.bindings` 包含 `match`、`mismatch`、
 `unmodeled` 及未观察到的符号，并保留日志文件/行号/PID。路径按字面匹配，路径别名、
 延迟绑定和未执行分支会影响对照；不一致本身不改变 trace 退出码，也不代表运行失败。
+
+## A/B 根因解释（阶段 3）
+
+`compare --env-a a.json --env-b b.json --explain --format json` 在原有差异之外增加
+`explanation`：`root_causes`、`unexplained`、`deferred`、`persistent_findings` 和环境参数变化。
+目前建立缺库、版本缺失、强符号缺失与依赖选择变化之间的静态因果关联，附双方搜索记录、
+库哈希或绑定候选，以及每个依赖的首个分歧。要求请求对象内容一致且证据可唯一匹配。
+证据不足、身份歧义或模型不支持时不强行归因；环境参数变化本身不等于已证明的原因。
+A/B 都已有的问题单独列为持续问题。依赖图不完整时的符号缺失列为待确认问题。
+`static_causal_link` 表示静态需求与差异关联，不证明 A 的全部运行路径成功，也不证明延迟绑定已经执行。
