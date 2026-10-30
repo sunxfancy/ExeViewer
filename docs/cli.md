@@ -101,3 +101,15 @@ cargo test --offline
 ```
 
 Linux x86-64 上的端到端用例需要 Python 3、GCC 和 `/lib64/ld-linux-x86-64.so.2`。测试自行编译小型版本化共享库和可执行文件，覆盖搜索作用域、版本/符号错误、路径隔离、无节区表、缓存、预加载、A/B 对比、日志采集和超时，并用真实 glibc loader 校验本机库选择。
+
+### 符号绑定证据
+
+`trace` 的 `binding` 事件增加 `binding` 对象：`requester`、`provider`、
+`requester_namespace`、`provider_namespace`、`symbol`、`version` 和
+`certainty: observed`。这些字段来自 glibc 实际绑定日志，可用于确认 LD_PRELOAD
+是否改变符号提供者；不代表未执行路径或 IFUNC 最终实现地址。
+静态 `diagnose` 当前只检查启动对象集合中是否存在匹配定义，尚不预测完整绑定作用域。
+
+解析器要求 LD_DEBUG 的数字 PID 前缀与已知事件格式；没有 PID 的 stderr 仅识别
+已知共享库加载、符号查找及版本缺失错误格式。普通包含 `error:` 的应用日志不会
+直接导致失败；完全没有可识别事件时返回 2。导入文本的格式匹配不构成来源认证。

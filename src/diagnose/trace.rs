@@ -33,12 +33,52 @@ pub struct TraceArgs {
     #[arg(last = true)]
     pub args: Vec<String>,
 }
+// LD_DEBUG records carry a decimal PID prefix. Application stderr does not
+// become loader evidence merely because it contains one of the same words.
 fn events(text: &str, source: &str) -> Vec<Value> {
-    text.lines().enumerate().filter_map(|(i,line)|{
-        let kind=if line.contains("find library="){"search"}else if line.contains("search path="){"search_path"}else if line.contains("trying file="){"candidate"}else if line.contains("generating link map"){"mapped"}else if line.contains("calling init:"){"initialize"}else if line.contains("calling fini:"){"finalize"}else if line.contains("dynamically loaded by"){"dynamic_load"}else if line.contains("needed by"){"dependency"}else if line.contains("binding file"){"binding"}else if line.contains("checking for version"){"version_check"}else if line.contains("error:"){"loader_error"}else{return None};
-        let pid=line.trim().split(':').next().and_then(|s|s.parse::<u32>().ok());
-        let object=if kind=="initialize"{line.split("calling init:").nth(1).map(|s|s.trim().to_string())}else if kind=="mapped"{line.split("file=").nth(1).and_then(|s|s.split(" [").next()).map(|s|s.trim().to_string())}else{None};
-        Some(json!({"source":source,"line":i+1,"pid":pid,"kind":kind,"object":object,"evidence":line}))
+    text.lines().enumerate().filter_map(|(i, line)| {
+        let (prefix, body) = line.trim_start().split_once(':')?;
+        let pid = prefix.parse::<u32>().ok();
+        let body = body.trim();
+        let kind = if pid.is_some() {
+            if body.starts_with("find library=") { "search" }
+            else if body.starts_with("search path=") { "search_path" }
+            else if body.starts_with("trying file=") { "candidate" }
+            else if body.starts_with("file=") && body.ends_with("generating link map") { "mapped" }
+            else if body.starts_with("calling init:") { "initialize" }
+            else if body.starts_with("calling fini:") { "finalize" }
+            else if body.starts_with("file=") && body.contains("dynamically loaded by") { "dynamic_load" }
+            else if body.starts_with("file=") && body.contains("needed by") { "dependency" }
+            else if body.starts_with("binding file ") { "binding" }
+            else if body.starts_with("checking for version ") { "version_check" }
+            else if body.contains(": error: ") && body.ends_with("(fatal)") { "loader_error" }
+            else { return None }
+        } else if body.starts_with("error while loading shared libraries: ")
+            || body.starts_with("symbol lookup error: ")
+            || (body.contains(": version `") && body.contains("' not found (required by ") && body.ends_with(')')) {
+            "loader_error"
+        } else { return None };
+        let object = if kind == "initialize" || kind == "finalize" {
+            body.split_once(':').map(|(_, s)| s.trim().to_string())
+        } else if kind == "mapped" {
+            body.strip_prefix("file=").and_then(|s| s.split_once(" [")).map(|(s, _)| s.trim().to_string())
+        } else { None };
+        let mut event = json!({"source":source,"line":i+1,"pid":pid,"kind":kind,"object":object,"evidence":line});
+        if kind == "binding" {
+            // Preserve namespace IDs: the same pathname can exist in multiple scopes.
+            let binding = body.strip_prefix("binding file ")?;
+            let (requester, rest) = binding.split_once(" [")?;
+            let (requester_namespace, rest) = rest.split_once("] to ")?;
+            let (provider, rest) = rest.split_once(" [")?;
+            let (provider_namespace, rest) = rest.split_once("]: ")?;
+            let (_, symbol) = rest.split_once(" symbol `")?;
+            let (symbol, rest) = symbol.split_once('\'')?;
+            let version = rest.trim().strip_prefix('[').and_then(|s| s.strip_suffix(']'));
+            event["binding"] = json!({"requester":requester,"provider":provider,
+                "requester_namespace":requester_namespace,"provider_namespace":provider_namespace,
+                "symbol":symbol,"version":version,"certainty":"observed"});
+        }
+        Some(event)
     }).collect()
 }
 #[cfg(unix)]
@@ -196,6 +236,7 @@ pub fn run(a: &TraceArgs) -> Result<(Value, i32), String> {
             r.objects.iter().skip(1).map(|o| o.path.clone()).collect();
         let observed: std::collections::BTreeSet<_> = all
             .iter()
+            .filter(|e| e["kind"] == "mapped" || e["kind"] == "initialize")
             .filter_map(|e| e["object"].as_str())
             .filter(|p| Path::new(p).is_absolute())
             .map(String::from)

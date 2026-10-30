@@ -157,6 +157,51 @@ class DiagnosisTests(unittest.TestCase):
         self.assertEqual(code,0);self.assertTrue(any(e['kind']=='initialize' for e in d['events']))
         self.assertTrue(any(e['kind']=='candidate' for e in d['events']))
 
+    def test_trace_rejects_application_messages(self):
+        log = self.base/'application.log'
+        log.write_text('application error: optional config absent; continuing normally\n'
+                       'application: calling init: pretend.so\n'
+                       '123: arbitrary error: recoverable\n')
+        code, report = self.call('trace', '--log', log, '--format', 'json')
+        self.assertEqual(code, 2)
+        self.assertEqual(report['events'], [])
+
+    def test_trace_recognizes_loader_failure(self):
+        app, foo = self.fixture()
+        env = os.environ.copy()
+        env.pop('LD_LIBRARY_PATH', None)
+        env.pop('LD_PRELOAD', None)
+        p = subprocess.run([app], env=env, capture_output=True)
+        self.assertNotEqual(p.returncode, 0)
+        log = self.base/'failed.log'; log.write_bytes(p.stderr)
+        code, report = self.call('trace', '--log', log, '--format', 'json')
+        self.assertEqual(code, 1, report)
+        self.assertEqual(report['events'][0]['kind'], 'loader_error')
+
+    def test_trace_observes_preload_symbol_provider(self):
+        foo = self.cc('libfoo.so', 'int foo(void){return 0;}', '-shared')
+        override = self.cc('override.so', 'int foo(void){return 0;}', '-shared')
+        source = self.build/'main.c'
+        source.write_text('extern int foo(void);int main(void){return foo();}')
+        app = self.build/'main'
+        subprocess.run(['gcc', str(source), '-o', str(app), '-L'+str(self.build),
+                        '-lfoo', '-Wl,-rpath,'+str(self.build)], check=True)
+        for provider, preload in [(foo, ''), (override, str(override))]:
+            env = os.environ.copy()
+            env.update(LD_DEBUG='bindings', LD_PRELOAD=preload)
+            env.pop('LD_DEBUG_OUTPUT', None)
+            p = subprocess.run([app], env=env, capture_output=True, check=True)
+            log = self.base/'bindings.log'; log.write_bytes(p.stderr)
+            code, report = self.call('trace', '--log', log, '--format', 'json')
+            self.assertEqual(code, 0)
+            bindings = [e['binding'] for e in report['events'] if e['kind']=='binding']
+            found = [b for b in bindings if b['symbol']=='foo']
+            self.assertEqual(len(found), 1)
+            self.assertEqual(found[0]['provider'], str(provider))
+            self.assertEqual(found[0]['requester'], str(app))
+            self.assertEqual(found[0]['requester_namespace'], '0')
+            self.assertTrue(any(b['version'] and b['version'].startswith('GLIBC_') for b in bindings))
+
     def test_cache_precedes_default_directory(self):
         app,foo=self.fixture()
         (self.root/'cached').mkdir();shutil.copy(foo,self.root/'cached')
