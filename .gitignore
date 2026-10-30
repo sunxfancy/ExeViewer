@@ -1,2 +1,4 @@
 /target
 *.log
+__pycache__/
+/test-results/

@@ -190,10 +190,13 @@ The original screenshots below show the ELF inspection interface:
 - [CLI guide: arguments, JSON, evidence and limitations](docs/cli.md)
 - [Product design and scope](docs/product-design.md)
 - [Reproduce the demo and screenshots](docs/demo/README.md)
+- [Test suites, local commands and CI coverage](tests/README.md)
 
 Run `cargo test --locked`. Linux diagnostic fixtures need GCC, Python 3, and glibc;
-they compare representative cases against the real loader. The CI workflow targets
-Ubuntu 22.04 and 24.04; consult individual PR checks for actual results.
+they compare representative cases against the real loader. CI runs all 61 cases and the
+README demo on Ubuntu 22.04/24.04 in debug and release builds, plus Clippy correctness
+and local documentation checks. Logs and demo evidence are retained for seven days;
+consult individual PR checks for actual results.
 
 ## License
 
