@@ -113,3 +113,81 @@ Linux x86-64 上的端到端用例需要 Python 3、GCC 和 `/lib64/ld-linux-x86
 解析器要求 LD_DEBUG 的数字 PID 前缀与已知事件格式；没有 PID 的 stderr 仅识别
 已知共享库加载、符号查找及版本缺失错误格式。普通包含 `error:` 的应用日志不会
 直接导致失败；完全没有可识别事件时返回 2。导入文本的格式匹配不构成来源认证。
+
+## 环境清单（阶段 1）
+
+```sh
+ExeViewer env capture ./app --output b-env.json --default-path /lib64:/usr/lib64 --format json
+ExeViewer diagnose ./app --env b-env.json --rootfs ./b-rootfs --format json
+```
+
+`env capture FILE` 不执行目标，沿用 diagnose 的输入选项；`--output` 必须不存在。
+清单是 `schema_version: 1, kind: environment_snapshot`，包含安装路径、程序哈希、
+环境输入、依赖和配置文件哈希、符号链接解析后的路径、缺失候选记录，以及本机各 CPU
+共同的 flags（离线不采宿主 CPU）。默认目录区分显式输入和常见目录假设，不宣称自动发现加载器编译配置。
+CPU flags 不自动换算为可用 ISA 等级，ISA 仍使用明确输入。
+
+清单不打包共享库，需要另行提供 rootfs。导入时校验输入产物和每个记录的文件/缺失候选，
+内容或链接目标变化会拒绝使用旧清单，需重新采集。显式 CLI 参数覆盖清单中的环境参数，
+不继承宿主库路径。校验范围是已记录证据，不是整个文件系统；分析期间应保持文件系统不变。
+即使诊断不完整，仍可保存清单，退出码沿用该次诊断结果。CI 在 Ubuntu 22.04/24.04 执行真实加载器对照测试。
+
+## 符号预测与实测核对（阶段 2）
+
+诊断报告新增 `bindings`（读取旧报告时默认为空）：请求对象、符号/版本、按启动全局
+查找顺序排列的定义候选、版本是否匹配、预测提供者和被覆盖的候选。
+预测仅针对未定义动态符号，采用默认 glibc 弱符号规则；不预测已定义符号的内部引用、
+IFUNC 最终实现地址或独立命名空间。依赖不完整、GNU_UNIQUE、DT_SYMBOLIC 等不支持的
+作用域返回 `certainty: unknown` 和空 provider，仍保留候选。
+
+`trace --baseline diagnosis.json` 的 `comparison.bindings` 包含 `match`、`mismatch`、
+`unmodeled` 及未观察到的符号，并保留日志文件/行号/PID。路径按字面匹配，路径别名、
+延迟绑定和未执行分支会影响对照；不一致本身不改变 trace 退出码，也不代表运行失败。
+
+## A/B 根因解释（阶段 3）
+
+`compare --env-a a.json --env-b b.json --explain --format json` 在原有差异之外增加
+`explanation`：`root_causes`、`unexplained`、`deferred`、`persistent_findings` 和环境参数变化。
+目前建立缺库、版本缺失、强符号缺失与依赖选择变化之间的静态因果关联，附双方搜索记录、
+库哈希或绑定候选，以及每个依赖的首个分歧。要求请求对象内容一致且证据可唯一匹配。
+证据不足、身份歧义或模型不支持时不强行归因；环境参数变化本身不等于已证明的原因。
+A/B 都已有的问题单独列为持续问题。依赖图不完整时的符号缺失列为待确认问题。
+`static_causal_link` 表示静态需求与差异关联，不证明 A 的全部运行路径成功，也不证明延迟绑定已经执行。
+
+## 修复模拟与复验（阶段 4）
+
+创建 `fix.json`（source 相对路径以此配置文件所在目录为基准）：
+
+```json
+{
+  "schema_version": 1,
+  "kind": "diagnosis_overrides",
+  "library_path": ["/opt/app/lib"],
+  "replacements": [
+    {"target": "/opt/app/lib/libfoo.so", "source": "./fixed/libfoo.so"}
+  ]
+}
+```
+
+```sh
+ExeViewer diagnose ./app --env b-env.json --rootfs ./b-rootfs \
+  --overrides fix.json --verification-dir ./verification-001 --format json
+```
+
+`--verification-dir` 必须是新目录。工具先校验清单和诊断原始环境，再对显式修改重新诊断。
+配置可以覆盖 cwd、library_path、preload、default_paths；replacements 仅替换指定目标
+路径的 ELF 文件，可模拟部署至新目录，不允许替换主产物或目录。未知配置字段会报错，避免拼写错误被忽略。
+替换文件复制到复验目录，原 rootfs 和源文件均不修改。报告保留目标路径，按该路径计算 `$ORIGIN`。
+
+目录保存 before.json、after.json、verification.json、替换文件及指向这些副本的 overrides.json，
+可复用保存的配置再次复验。`repair_verification` 输出消失、持续和新增的诊断，以及修复前后状态；
+诊断按规则、严重程度、对象和消息匹配。“消失”不必然证明修复，需一起检查新增 unknown 和最终状态。
+退出码沿用修复后诊断：0 为检查范围内无阻断，1 为阻断，2 为不完整/错误。
+
+结果始终标记 `runtime_validation: not_run`。如需实际验证，先在真实测试环境部署候选修复，
+再显式 `trace --execute ... --baseline verification-001/after.json`；本命令不会部署或自动执行。
+复验中途遇到错误时，独立输出目录可能留下已复制的证据，原环境不会被修改。
+
+环境清单同时记录 LD_DYNAMIC_WEAK、LD_AUDIT、LD_HWCAP_MASK、GLIBC_TUNABLES、LD_BIND_NOW、
+LD_BIND_NOT、LD_ASSUME_KERNEL 等额外加载器设置；这些规则尚未建模时诊断返回 unknown，
+不冒用默认符号查找规则给出确定提供者。没有记录的宿主设置不会在离线导入时补入。

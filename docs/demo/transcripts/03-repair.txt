@@ -1,0 +1,18 @@
+$ ExeViewer diagnose "$DEMO/app" --rootfs "$DEMO/b-root" \
+    --target-path /opt/demo/app --default-path /lib \
+    --overrides "$DEMO/fix.json" --verification-dir "$DEMO/verification" \
+    --format json
+
+# Selected fields from actual JSON output
+{
+  "before_status": "blocked",
+  "after_status": "no_blockers_in_checked_scope",
+  "runtime_validation": "not_run",
+  "resolved_rules": [
+    "VERSION_MISSING",
+    "SYMBOL_UNRESOLVED"
+  ],
+  "introduced_findings": []
+}
+
+# ExeViewer exit code: 0

@@ -1,8 +1,12 @@
 pub mod cli;
+pub mod repair;
+pub mod explain;
+pub mod bindings;
 pub mod elf_info;
 pub mod environment;
 pub mod trace;
 pub mod view;
+pub mod snapshot;
 use elf_info::ElfInfo;
 use environment::{CacheEntry, Environment};
 use serde::{Deserialize, Serialize};
@@ -55,6 +59,8 @@ pub struct Report {
     pub objects: Vec<Object>,
     pub dependencies: Vec<Edge>,
     pub diagnostics: Vec<Diagnostic>,
+    #[serde(default)]
+    pub bindings: Vec<bindings::Binding>,
 }
 impl Report {
     pub fn exit_code(&self) -> i32 {
@@ -118,6 +124,10 @@ impl Report {
                 writeln!(s, "    [{}] {:?}: {:?}", a.source, a.path, a.outcome).unwrap();
             }
         }
+        s.push_str("\nSymbol provider predictions:\n");
+        for b in &self.bindings {
+            writeln!(s, "  {}: {} {:?} => {:?} [{}]; shadowed: {:?}", b.requester, b.symbol, b.version, b.provider, b.certainty, b.shadowed).unwrap();
+        }
         s.push_str("\nLimits (no guarantee of successful execution):\n");
         for l in &self.limitations {
             writeln!(s, "  {l}").unwrap();
@@ -167,7 +177,13 @@ pub fn diagnose(
             )
         }
     });
-    let mut report=Report{schema_version:1,kind:"diagnosis".into(),artifact:input.to_string_lossy().into(),environment:env.clone(),status:String::new(),scope:vec!["Linux ELF64 x86-64 glibc startup dependency and symbol requirements".into()],limitations:vec!["Static startup model; does not prove program execution, ABI semantics, CPU instruction or kernel compatibility.".into(),"dlopen, separate namespaces, IFUNC execution and lazy-binding execution paths require runtime observation.".into(),"Default directories are explicit model inputs; use --default-path to match the target loader build. $LIB/$PLATFORM and CPU hwcaps require target-specific evidence.".into()],objects:vec![Object{path:logical.clone(),chain:vec![logical.clone()],elf:main.clone()}],dependencies:vec![],diagnostics:vec![]};
+    let mut report=Report{schema_version:1,kind:"diagnosis".into(),artifact:input.to_string_lossy().into(),environment:env.clone(),status:String::new(),scope:vec!["Linux ELF64 x86-64 glibc startup dependency and symbol requirements".into()],limitations:vec!["Static startup model; does not prove program execution, ABI semantics, CPU instruction or kernel compatibility.".into(),"dlopen, separate namespaces, IFUNC execution and lazy-binding execution paths require runtime observation.".into(),"Default directories are explicit model inputs; use --default-path to match the target loader build. $LIB/$PLATFORM and CPU hwcaps require target-specific evidence.".into()],objects:vec![Object{path:logical.clone(),chain:vec![logical.clone()],elf:main.clone()}],dependencies:vec![],diagnostics:vec![],bindings:vec![]};
+    if !env.loader_settings.is_empty() {
+        report.issue("LOADER_SETTINGS_UNKNOWN", "unknown", &logical, &[logical.clone()],
+            "Additional loader environment settings are recorded but not modeled".into(),
+            env.loader_settings.iter().map(|(k,v)|format!("{k}={v}")).collect(),
+            "Verify these settings with a target trace; do not treat the default startup binding model as authoritative.");
+    }
     if target_path.is_none()
         && !fs::canonicalize(input)
             .map_err(|e| e.to_string())?
@@ -466,6 +482,7 @@ pub fn diagnose(
             );
         }
     }
+    report.bindings = bindings::predict(&report);
     check_symbols(&mut report, &names);
     finish(report)
 }
@@ -795,14 +812,6 @@ fn load(
 }
 fn check_symbols(r: &mut Report, names: &BTreeMap<String, usize>) {
     let objects = r.objects.clone();
-    let mut exports: BTreeMap<&str, Vec<&elf_info::Symbol>> = BTreeMap::new();
-    for o in &objects {
-        for s in &o.elf.symbols {
-            if s.defined {
-                exports.entry(&s.name).or_default().push(s);
-            }
-        }
-    }
     for o in &objects {
         for v in &o.elf.versions_needed {
             if let Some(&provider) = names.get(&v.library) {
@@ -821,12 +830,8 @@ fn check_symbols(r: &mut Report, names: &BTreeMap<String, usize>) {
             if s.defined || s.weak {
                 continue;
             }
-            let found = exports.get(s.name.as_str()).is_some_and(|items| {
-                items.iter().any(|p| match &s.version {
-                    Some(v) => p.version.as_ref() == Some(v) || p.version.is_none(),
-                    None => p.version.is_none() || p.default_version,
-                })
-            });
+            let found = r.bindings.iter().find(|b| b.requester == o.path && b.symbol == s.name && b.version == s.version)
+                .is_some_and(|b| b.candidates.iter().any(|c| c.matches));
             if !found {
                 let partial = r.objects.iter().any(|o| !o.elf.notes.is_empty())
                     || r.diagnostics

@@ -14,6 +14,11 @@ pub enum Format {
 }
 #[derive(Debug, Subcommand)]
 pub enum Commands {
+    /// Capture portable environment evidence for one executable
+    Env {
+        #[command(subcommand)]
+        command: EnvCommands,
+    },
     /// Diagnose static startup compatibility against a target filesystem
     Diagnose(DiagnoseArgs),
     /// Print ELF metadata and declared symbol/version requirements without execution
@@ -28,15 +33,36 @@ pub enum Commands {
         env_a: PathBuf,
         #[arg(long)]
         env_b: PathBuf,
+        /// Link dependency differences to new failures using saved evidence
+        #[arg(long)]
+        explain: bool,
         #[arg(long, value_enum, default_value = "text")]
         format: Format,
     },
     /// Import loader evidence, or explicitly execute a program to capture it
     Trace(super::trace::TraceArgs),
 }
-#[derive(Debug, Args)]
+#[derive(Debug, Subcommand)]
+pub enum EnvCommands {
+    Capture {
+        #[command(flatten)]
+        args: DiagnoseArgs,
+        #[arg(long)]
+        output: PathBuf,
+    },
+}
+#[derive(Clone, Debug, Args)]
 pub struct DiagnoseArgs {
     pub file: PathBuf,
+    /// Import a captured environment; verify its file evidence against --rootfs
+    #[arg(long)]
+    pub env: Option<PathBuf>,
+    /// Explicit environment/file substitutions for a static repair simulation
+    #[arg(long, requires = "verification_dir", conflicts_with = "interactive")]
+    pub overrides: Option<PathBuf>,
+    /// New directory retaining before/after reports and replacement file copies
+    #[arg(long, requires = "overrides")]
+    pub verification_dir: Option<PathBuf>,
     /// Explore this same diagnosis in an interactive terminal interface
     #[arg(long, conflicts_with = "format")]
     pub interactive: bool,
@@ -56,13 +82,10 @@ pub struct DiagnoseArgs {
     #[arg(long)]
     pub preload: Option<String>,
     /// Colon-separated directories compiled into the target loader
-    #[arg(
-        long,
-        default_value = "/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:/lib64:/usr/lib64:/lib:/usr/lib"
-    )]
-    pub default_path: String,
-    #[arg(long, default_value_t = 62)]
-    pub machine: u16,
+    #[arg(long)]
+    pub default_path: Option<String>,
+    #[arg(long)]
+    pub machine: Option<u16>,
     /// Target x86-64 ISA level (1..4); omitted means unknown
     #[arg(long, value_parser=clap::value_parser!(u8).range(1..=4))]
     pub isa_level: Option<u8>,
@@ -87,6 +110,9 @@ fn json<T: Serialize>(value: &T) -> Result<String, String> {
 pub fn run(command: Commands) -> i32 {
     let format = match &command {
         Commands::Diagnose(a) => a.format,
+        Commands::Env {
+            command: EnvCommands::Capture { args, .. },
+        } => args.format,
         Commands::Inspect { format, .. } | Commands::Compare { format, .. } => *format,
         Commands::Trace(a) => a.format,
     };
@@ -104,86 +130,35 @@ pub fn run(command: Commands) -> i32 {
 }
 fn execute(command: Commands) -> Result<i32, String> {
     match command {
+        Commands::Env {
+            command: EnvCommands::Capture { args, output: path },
+        } => {
+            if args.env.is_some() || args.interactive || args.overrides.is_some() {
+                return Err("capture does not accept --env, --interactive, or --overrides".into());
+            }
+            let report = report_for(&args)?;
+            let snapshot = super::snapshot::capture(&report, args.default_path.is_some())?;
+            super::snapshot::write_new(&path, &snapshot)?;
+            output(
+                &json(
+                    &serde_json::json!({"schema_version":1,"kind":"environment_capture","output":path,"diagnosis_status":report.status,"file_count":snapshot.files.len(),"limitations":snapshot.limitations}),
+                )?,
+                report.exit_code(),
+            )
+        }
         Commands::Diagnose(a) => {
-            let rootfs = fs::canonicalize(&a.rootfs).map_err(|e| format!("rootfs: {e}"))?;
-            if !rootfs.is_dir() {
-                return Err("rootfs must be a directory".into());
-            }
-            let local = rootfs == std::path::Path::new("/");
-            let cwd = a.cwd.unwrap_or_else(|| {
-                if local {
-                    std::env::current_dir()
-                        .unwrap_or_else(|_| PathBuf::from("/"))
-                        .to_string_lossy()
-                        .into()
-                } else {
-                    "/".into()
-                }
-            });
-            if !cwd.starts_with('/') {
-                return Err("--cwd must be an absolute target path".into());
-            }
-            if a.target_path.as_ref().is_some_and(|p| !p.starts_with('/')) {
-                return Err("--target-path must be absolute inside the target".into());
-            }
-            let library = a.library_path.or_else(|| {
-                if local {
-                    std::env::var("LD_LIBRARY_PATH").ok()
-                } else {
-                    None
-                }
-            });
-            let preload = a
-                .preload
-                .or_else(|| {
-                    if local {
-                        std::env::var("LD_PRELOAD").ok()
+            if a.overrides.is_some() {
+                let (value, code) = super::repair::run(&a)?;
+                return output(
+                    &if matches!(a.format, Format::Json) {
+                        json(&value)?
                     } else {
-                        None
-                    }
-                })
-                .unwrap_or_default();
-            let defaults: Vec<String> = a
-                .default_path
-                .split(':')
-                .filter(|s| !s.is_empty())
-                .map(String::from)
-                .collect();
-            if defaults.iter().any(|p| !p.starts_with('/')) {
-                return Err("--default-path entries must be absolute target paths".into());
+                        format!("ExeViewer static repair verification\n{}", json(&value)?)
+                    },
+                    code,
+                );
             }
-            let env = Environment {
-                rootfs,
-                cwd,
-                library_path: library
-                    .filter(|s| !s.is_empty())
-                    .map(|s| s.split([':', ';']).map(String::from).collect())
-                    .unwrap_or_default(),
-                preload: preload
-                    .split([':', ' '])
-                    .filter(|s| !s.is_empty())
-                    .map(String::from)
-                    .collect(),
-                default_paths: defaults,
-                target_machine: a.machine,
-                isa_level: a.isa_level,
-                kernel_release: a.kernel_release.or_else(|| {
-                    if local {
-                        fs::read_to_string("/proc/sys/kernel/osrelease")
-                            .ok()
-                            .map(|s| s.trim().into())
-                    } else {
-                        None
-                    }
-                }),
-                source: if local {
-                    "local filesystem; LD_LIBRARY_PATH/LD_PRELOAD inherited unless overridden"
-                } else {
-                    "offline rootfs; no host environment search paths inherited"
-                }
-                .into(),
-            };
-            let r = super::diagnose(&a.file, a.target_path.as_deref(), env)?;
+            let r = report_for(&a)?;
             let code = r.exit_code();
             if a.interactive {
                 super::view::show(&r)?;
@@ -214,6 +189,7 @@ fn execute(command: Commands) -> Result<i32, String> {
         Commands::Compare {
             env_a,
             env_b,
+            explain,
             format,
         } => {
             let read = |p: PathBuf| -> Result<Report, String> {
@@ -280,7 +256,7 @@ fn execute(command: Commands) -> Result<i32, String> {
             } else {
                 0
             };
-            let value = serde_json::json!({"schema_version":1,"kind":"comparison","artifact_sha256":first_a.elf.sha256,"status_a":a.status,"status_b":b.status,"changes":changes,"diagnostics_a":a.diagnostics,"diagnostics_b":b.diagnostics,"environment_a":a.environment,"environment_b":b.environment,"limitations":["Compares saved observations, not current filesystem contents. Changes include search evidence, selected paths and library content hashes."]});
+            let value = serde_json::json!({"schema_version":1,"kind":"comparison","explanation":if explain {super::explain::explain(&a,&b)} else {serde_json::Value::Null},"artifact_sha256":first_a.elf.sha256,"status_a":a.status,"status_b":b.status,"changes":changes,"diagnostics_a":a.diagnostics,"diagnostics_b":b.diagnostics,"environment_a":a.environment,"environment_b":b.environment,"limitations":["Compares saved observations, not current filesystem contents. Changes include search evidence, selected paths and library content hashes."]});
             output(
                 &if matches!(format, Format::Json) {
                     json(&value)?
@@ -302,4 +278,163 @@ fn execute(command: Commands) -> Result<i32, String> {
             )
         }
     }
+}
+
+pub(super) fn report_for(args: &DiagnoseArgs) -> Result<Report, String> {
+    let a = args.clone();
+    if let Some(path) = &a.env {
+        let mut snapshot = super::snapshot::read(path)?;
+        let rootfs = fs::canonicalize(&a.rootfs).map_err(|e| e.to_string())?;
+        snapshot.verify(&a.file, &rootfs)?;
+        snapshot.environment.rootfs = rootfs;
+        let mut env = snapshot.environment;
+        if let Some(v) = a.cwd {
+            env.cwd = v;
+        }
+        if let Some(v) = a.library_path {
+            env.library_path = if v.is_empty() {
+                vec![]
+            } else {
+                v.split([':', ';']).map(String::from).collect()
+            };
+        }
+        if let Some(v) = a.preload {
+            env.preload = v
+                .split([':', ' '])
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect();
+        }
+        if let Some(v) = a.default_path {
+            env.default_paths = v
+                .split(':')
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect();
+        }
+        if let Some(v) = a.machine {
+            env.target_machine = v;
+        }
+        if a.isa_level.is_some() {
+            env.isa_level = a.isa_level;
+        }
+        if a.kernel_release.is_some() {
+            env.kernel_release = a.kernel_release;
+        }
+        if !env.cwd.starts_with('/') || env.default_paths.iter().any(|p| !p.starts_with('/')) {
+            return Err("environment paths must be absolute".into());
+        }
+        env.source =
+            "verified captured file evidence; explicit command options override captured inputs"
+                .into();
+        let target = a.target_path.as_deref().unwrap_or(&snapshot.target_path);
+        if !target.starts_with('/') {
+            return Err("--target-path must be absolute".into());
+        }
+        return super::diagnose(&a.file, Some(target), env);
+    }
+    let rootfs = fs::canonicalize(&a.rootfs).map_err(|e| format!("rootfs: {e}"))?;
+    if !rootfs.is_dir() {
+        return Err("rootfs must be a directory".into());
+    }
+    let local = rootfs == std::path::Path::new("/");
+    let cwd = a.cwd.unwrap_or_else(|| {
+        if local {
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("/"))
+                .to_string_lossy()
+                .into()
+        } else {
+            "/".into()
+        }
+    });
+    if !cwd.starts_with('/') {
+        return Err("--cwd must be an absolute target path".into());
+    }
+    if a.target_path.as_ref().is_some_and(|p| !p.starts_with('/')) {
+        return Err("--target-path must be absolute inside the target".into());
+    }
+    let library = a.library_path.or_else(|| {
+        if local {
+            std::env::var("LD_LIBRARY_PATH").ok()
+        } else {
+            None
+        }
+    });
+    let preload = a
+        .preload
+        .or_else(|| {
+            if local {
+                std::env::var("LD_PRELOAD").ok()
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
+    let defaults: Vec<String> = a
+        .default_path
+        .unwrap_or_else(|| {
+            "/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:/lib64:/usr/lib64:/lib:/usr/lib".into()
+        })
+        .split(':')
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect();
+    if defaults.iter().any(|p| !p.starts_with('/')) {
+        return Err("--default-path entries must be absolute target paths".into());
+    }
+    let env = Environment {
+        replacements: Default::default(),
+        loader_settings: if local {
+            [
+                "LD_DYNAMIC_WEAK",
+                "LD_AUDIT",
+                "LD_HWCAP_MASK",
+                "GLIBC_TUNABLES",
+                "LD_BIND_NOW",
+                "LD_BIND_NOT",
+                "LD_ASSUME_KERNEL",
+            ]
+            .into_iter()
+            .filter_map(|key| {
+                std::env::var(key)
+                    .ok()
+                    .filter(|v| !v.is_empty())
+                    .map(|v| (key.into(), v))
+            })
+            .collect()
+        } else {
+            Default::default()
+        },
+        rootfs,
+        cwd,
+        library_path: library
+            .filter(|s| !s.is_empty())
+            .map(|s| s.split([':', ';']).map(String::from).collect())
+            .unwrap_or_default(),
+        preload: preload
+            .split([':', ' '])
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .collect(),
+        default_paths: defaults,
+        target_machine: a.machine.unwrap_or(62),
+        isa_level: a.isa_level,
+        kernel_release: a.kernel_release.or_else(|| {
+            if local {
+                fs::read_to_string("/proc/sys/kernel/osrelease")
+                    .ok()
+                    .map(|s| s.trim().into())
+            } else {
+                None
+            }
+        }),
+        source: if local {
+            "local filesystem; LD_LIBRARY_PATH/LD_PRELOAD inherited unless overridden"
+        } else {
+            "offline rootfs; no host environment search paths inherited"
+        }
+        .into(),
+    };
+    super::diagnose(&a.file, a.target_path.as_deref(), env)
 }

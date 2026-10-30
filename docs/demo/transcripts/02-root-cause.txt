@@ -1,0 +1,17 @@
+$ ExeViewer compare --env-a "$DEMO/a.json" --env-b "$DEMO/b.json" \
+    --explain --format json
+
+# Selected fields from actual JSON output
+{
+  "rule_id": "VERSION_MISSING",
+  "certainty": "static_causal_link",
+  "first_divergence": {
+    "a": "925cd6d10f7de6ed81522bd0752ee33a6bd9eddebb21a2f2acc9e336ee054a23",
+    "b": "6ccd92ebb595708f7d31c830b2398d7398b0606a813372a8726b4fbe056b73a5",
+    "kind": "library_content"
+  },
+  "consequence": "/opt/demo/app requires FOO_2.0 from /lib/libfoo.so, which does not define it",
+  "explanation": "The same requester requires this version; B selects different library content/path that lacks the required version."
+}
+
+# ExeViewer exit code: 1
