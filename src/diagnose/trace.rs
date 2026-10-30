@@ -241,7 +241,7 @@ pub fn run(a: &TraceArgs) -> Result<(Value, i32), String> {
             .filter(|p| Path::new(p).is_absolute())
             .map(String::from)
             .collect();
-        comparison = json!({"predicted_not_observed":expected.difference(&observed).collect::<Vec<_>>(),"observed_not_predicted":observed.difference(&expected).collect::<Vec<_>>(),"note":"Path comparison only; symlink aliases and log omissions may explain differences. Missing observations are not proof of missing loads."});
+        comparison = json!({"bindings":super::bindings::compare(&r, &all),"predicted_not_observed":expected.difference(&observed).collect::<Vec<_>>(),"observed_not_predicted":observed.difference(&expected).collect::<Vec<_>>(),"note":"Path comparison only; symlink aliases and log omissions may explain differences. Missing observations are not proof of missing loads."});
     }
     Ok((
         json!({"schema_version":1,"kind":if a.execute{"trace_capture"}else{"trace_import"},"status":match code{2=>"incomplete",1=>"runtime_failure",_=>"observed"},"capture":metadata,"events":all,"comparison":comparison,"limitations":["Only the exercised execution path is observed. A successful run does not establish general compatibility.","LD_DEBUG changes runtime overhead; this is not a sandbox. Capture stops the process group at completion/timeout.","A candidate attempt is not a successful load. Initialization order and dependency order are distinct.","Log files are grouped by source/process, not merged into a global timeline. Imported logs cannot establish environment or completeness."]}),

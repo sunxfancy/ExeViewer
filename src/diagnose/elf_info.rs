@@ -15,6 +15,10 @@ pub struct Symbol {
     pub default_version: bool,
     pub weak: bool,
     pub defined: bool,
+    #[serde(default)]
+    pub symbol_type: u8,
+    #[serde(default)]
+    pub version_index: u16,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ElfInfo {
@@ -413,6 +417,10 @@ fn parse(data: Vec<u8>) -> Result<ElfInfo, String> {
             let p = base + i * 24;
             let name = string(r.u32(p)? as u64)?;
             let bind = r.bytes(p + 4, 1)?[0] >> 4;
+            if bind == 10 && !info.notes.iter().any(|n| n.contains("GNU_UNIQUE")) {
+                info.notes
+                    .push("GNU_UNIQUE symbol scope is not modeled".into());
+            }
             let visibility = r.bytes(p + 5, 1)?[0] & 3;
             if name.is_empty() || bind == 0 {
                 continue;
@@ -444,6 +452,8 @@ fn parse(data: Vec<u8>) -> Result<ElfInfo, String> {
                 default_version: v & 0x8000 == 0,
                 weak: bind == 2,
                 defined,
+                symbol_type: r.bytes(p + 4, 1)?[0] & 15,
+                version_index: v & 0x7fff,
             });
         }
     }

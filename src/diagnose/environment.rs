@@ -16,6 +16,11 @@ pub struct Environment {
     pub isa_level: Option<u8>,
     pub kernel_release: Option<String>,
     pub source: String,
+    #[serde(default)]
+    pub loader_settings: std::collections::BTreeMap<String, String>,
+    /// Private overlay used only by explicit repair simulation; never imported from JSON.
+    #[serde(skip)]
+    pub replacements: std::collections::BTreeMap<String, PathBuf>,
 }
 impl Environment {
     /// Resolve absolute symlinks against the target root, never the host root.
@@ -44,7 +49,26 @@ impl Environment {
                 continue;
             }
             let next = self.rootfs.join(&parts).join(&part);
-            let meta = fs::symlink_metadata(&next)?;
+            if pending.is_empty() {
+                let logical = format!("/{}", parts.join(&part).to_string_lossy());
+                if let Some(replacement) = self.replacements.get(&logical) {
+                    return Ok(replacement.clone());
+                }
+            }
+            let meta = match fs::symlink_metadata(&next) {
+                Ok(meta) => meta,
+                Err(e)
+                    if e.kind() == io::ErrorKind::NotFound
+                        && !pending.is_empty()
+                        && self.replacements.keys().any(|p| {
+                            p.starts_with(&format!("/{}/", parts.join(&part).to_string_lossy()))
+                        }) =>
+                {
+                    parts.push(part);
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
             if meta.file_type().is_symlink() {
                 links += 1;
                 if links > 40 {

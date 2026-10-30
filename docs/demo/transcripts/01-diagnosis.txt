@@ -1,0 +1,16 @@
+$ ExeViewer diagnose "$DEMO/app" --rootfs "$DEMO/b-root" \
+    --target-path /opt/demo/app --default-path /lib --format json
+
+# Selected fields from actual JSON output
+{
+  "status": "blocked",
+  "rule_id": "VERSION_MISSING",
+  "object": "/opt/demo/app",
+  "message": "/opt/demo/app requires FOO_2.0 from /lib/libfoo.so, which does not define it",
+  "evidence": [
+    "DT_VERNEED: libfoo.so@FOO_2.0",
+    "provider SHA-256: 6ccd92ebb595708f7d31c830b2398d7398b0606a813372a8726b4fbe056b73a5"
+  ]
+}
+
+# ExeViewer exit code: 1
