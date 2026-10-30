@@ -201,6 +201,24 @@ class DiagnosisTests(unittest.TestCase):
             self.assertEqual(found[0]['requester'], str(app))
             self.assertEqual(found[0]['requester_namespace'], '0')
             self.assertTrue(any(b['version'] and b['version'].startswith('GLIBC_') for b in bindings))
+            code, diagnosis = self.call('diagnose', app, '--preload', preload, '--format', 'json')
+            self.assertEqual(code, 0, diagnosis['diagnostics'])
+            prediction = next(b for b in diagnosis['bindings'] if b['requester']==str(app) and b['symbol']=='foo')
+            self.assertEqual(prediction['provider'], str(provider))
+            self.assertEqual(prediction['certainty'], 'predicted')
+            baseline = self.base/'baseline.json'; baseline.write_text(json.dumps(diagnosis))
+            code, checked = self.call('trace', '--log', log, '--baseline', baseline, '--format', 'json')
+            checks = checked['comparison']['bindings']['checks']
+            self.assertTrue(any(c['status']=='match' and c['observed']['symbol']=='foo' for c in checks))
+            if preload:
+                self.assertIn(str(foo), prediction['shadowed'])
+                original = self.base/'original.json'
+                code, checked = self.call('trace', '--log', log, '--baseline', original, '--format', 'json')
+                self.assertTrue(any(c['status']=='mismatch' and c['observed']['symbol']=='foo'
+                                    for c in checked['comparison']['bindings']['checks']))
+            else:
+                (self.base/'original.json').write_text(json.dumps(diagnosis))
+
 
     def test_environment_capture_replay_and_drift(self):
         app, foo = self.fixture()
@@ -241,6 +259,22 @@ class DiagnosisTests(unittest.TestCase):
         code, bad = self.call('diagnose', app, '--env', snapshot, '--rootfs', self.root, '--format', 'json')
         self.assertEqual(code, 2)
         self.assertIn('/early/libfoo.so', bad['error'])
+
+    def test_binding_prediction_preserves_version_candidates(self):
+        app, foo = self.fixture(version='FOO_2.0')
+        replacement = self.cc('wrong.so', 'int unrelated(void){return 0;}', '-shared')
+        shutil.copy(replacement, self.root/'lib/libfoo.so')
+        code, report = self.diagnose(app)
+        self.assertEqual(code, 1)
+        binding = next(b for b in report['bindings'] if b['symbol']=='foo')
+        self.assertEqual(binding['version'], 'FOO_2.0')
+        self.assertIsNone(binding['provider'])
+        self.assertEqual(binding['candidates'], [])
+        (self.root/'lib/libfoo.so').unlink()
+        code, report = self.diagnose(app)
+        binding = next(b for b in report['bindings'] if b['symbol']=='foo')
+        self.assertEqual(binding['certainty'], 'unknown')
+        self.assertIsNone(binding['provider'])
 
     def test_cache_precedes_default_directory(self):
         app,foo=self.fixture()
