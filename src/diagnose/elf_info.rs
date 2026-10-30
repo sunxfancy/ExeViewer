@@ -17,6 +17,8 @@ pub struct Symbol {
     pub defined: bool,
     #[serde(default)]
     pub symbol_type: u8,
+    #[serde(default)]
+    pub version_index: u16,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ElfInfo {
@@ -451,6 +453,7 @@ fn parse(data: Vec<u8>) -> Result<ElfInfo, String> {
                 weak: bind == 2,
                 defined,
                 symbol_type: r.bytes(p + 4, 1)?[0] & 15,
+                version_index: v & 0x7fff,
             });
         }
     }

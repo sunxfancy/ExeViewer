@@ -55,6 +55,7 @@ pub fn explain(a: &Report, b: &Report) -> Value {
         "target_machine",
         "isa_level",
         "kernel_release",
+        "loader_settings",
     ]
     .iter()
     .filter(|k| env_a[**k] != env_b[**k])

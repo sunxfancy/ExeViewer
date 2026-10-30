@@ -95,3 +95,18 @@ The Cargo binary name is `ExeViewer`.
 ## License
 
 MIT License (c) 2024 sunxfancy
+
+### Cross-environment diagnosis workflow
+
+```sh
+ExeViewer env capture ./app --output b-env.json --format json
+ExeViewer diagnose ./app --env b-env.json --rootfs ./b-rootfs --format json > b.json
+ExeViewer compare --env-a a.json --env-b b.json --explain --format json
+ExeViewer diagnose ./app --env b-env.json --rootfs ./b-rootfs \
+  --overrides fix.json --verification-dir ./verification-001 --format json
+```
+
+Environment manifests record hashes and missing search candidates; supply the target rootfs separately.
+Symbol predictions can be compared with actual `trace --baseline` binding events. Repair verification
+retains before/after reports and replacement copies without changing the target filesystem or executing it.
+See [CLI contracts and override examples](docs/cli.md) for supported scope and incomplete results.

@@ -76,7 +76,7 @@ pub fn predict(r: &Report) -> Vec<Binding> {
                 .map(|(path, s)| {
                     let matches = match &symbol.version {
                         Some(version) => s.version.as_ref() == Some(version) || s.version.is_none(),
-                        None => s.version.is_none() || s.default_version,
+                        None => s.version.is_none() || s.default_version || s.version_index == 2,
                     };
                     Candidate {
                         object: (*path).into(),

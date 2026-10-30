@@ -328,6 +328,110 @@ class DiagnosisTests(unittest.TestCase):
         self.assertFalse(limited['explanation']['root_causes'])
         self.assertTrue(limited['explanation']['unexplained'])
 
+    def test_repair_replacement_is_isolated_and_retained(self):
+        app, foo = self.fixture(version='FOO_2.0')
+        plan = self.base/'fix.json'
+        plan.write_text(json.dumps({'schema_version':1, 'kind':'diagnosis_overrides',
+                                    'replacements':[{'target':'/lib/libfoo.so','source':str(foo)}]}))
+        out = self.base/'verification'
+        snapshot = self.base/'broken-env.json'
+        captured, _ = self.call('env', 'capture', app, '--rootfs', self.root, '--target-path', '/app',
+                                '--default-path', '/lib', '--output', snapshot, '--format', 'json')
+        self.assertEqual(captured, 2)  # Missing dependencies are retained as incomplete evidence.
+        code, result = self.diagnose(app, '--env', snapshot, '--overrides', plan, '--verification-dir', out)
+        self.assertEqual(code, 0, result)
+        self.assertEqual(result['runtime_validation'], 'not_run')
+        self.assertFalse((self.root/'lib/libfoo.so').exists())
+        self.assertTrue(any(d['rule_id']=='LIBRARY_NOT_FOUND' for d in result['resolved_findings']))
+        before = json.loads((out/'before.json').read_text())
+        after = json.loads((out/'after.json').read_text())
+        self.assertTrue(before['diagnostics'])
+        self.assertFalse(after['diagnostics'])
+        self.assertEqual(after['objects'][-1]['elf']['sha256'], result['replacement_evidence'][0]['sha256'])
+        self.assertEqual(Path(result['replacement_evidence'][0]['copy']).read_bytes(), foo.read_bytes())
+        # Independent loader oracle: the retained provider satisfies the executable's requirements.
+        oracle = subprocess.run([str(LOADER), '--preload', result['replacement_evidence'][0]['copy'],
+                                 '--list', str(app)], capture_output=True)
+        self.assertEqual(oracle.returncode, 0, oracle.stderr)
+        foo.unlink()
+        code, replay = self.diagnose(app, '--overrides', out/'overrides.json',
+                                    '--verification-dir', self.base/'replayed')
+        self.assertEqual(code, 0, replay)
+
+        code, error = self.diagnose(app, '--overrides', out/'overrides.json', '--verification-dir', out)
+        self.assertEqual(code, 2)
+        self.assertEqual(json.loads((out/'after.json').read_text()), after)
+
+    def test_repair_path_change_and_new_failure(self):
+        app, foo = self.fixture()
+        (self.root/'good').mkdir(); shutil.copy(foo, self.root/'good')
+        plan = self.base/'paths.json'
+        plan.write_text(json.dumps({'schema_version':1, 'kind':'diagnosis_overrides', 'library_path':['/good']}))
+        code, fixed = self.diagnose(app, '--overrides', plan, '--verification-dir', self.base/'fixed')
+        self.assertEqual(code, 0, fixed)
+        # A proposed path may also introduce a new failure: never report this as a successful fix.
+        bad = self.cc('bad.so', 'int other(void){return 0;}', '-shared')
+        (self.root/'bad').mkdir(); shutil.copy(bad, self.root/'bad/libfoo.so')
+        plan.write_text(json.dumps({'schema_version':1, 'kind':'diagnosis_overrides', 'library_path':['/bad']}))
+        code, broken = self.diagnose(app, '--library-path', '/good', '--overrides', plan,
+                                    '--verification-dir', self.base/'broken')
+        self.assertEqual(code, 1)
+        self.assertTrue(any(d['rule_id']=='SYMBOL_UNRESOLVED' for d in broken['introduced_findings']))
+        self.assertEqual(broken['runtime_validation'], 'not_run')
+
+    def test_repair_rejects_invalid_plan_before_writing(self):
+        app, foo = self.fixture()
+        plan = self.base/'invalid.json'; out = self.base/'invalid-output'
+        for content in [
+            {'schema_version':1, 'kind':'diagnosis_overrides', 'library_paths':['/lib']},
+            {'schema_version':1, 'kind':'diagnosis_overrides', 'replacements':[{'target':'/app','source':str(foo)}]},
+            {'schema_version':1, 'kind':'diagnosis_overrides', 'replacements':[{'target':'/lib/../foo','source':str(foo)}]},
+        ]:
+            plan.write_text(json.dumps(content))
+            code, error = self.diagnose(app, '--overrides', plan, '--verification-dir', out)
+            self.assertEqual(code, 2)
+            self.assertFalse(out.exists())
+
+    def test_repair_virtual_new_directory(self):
+        app, foo = self.fixture()
+        plan = self.base/'new-directory.json'
+        plan.write_text(json.dumps({'schema_version':1,'kind':'diagnosis_overrides',
+                                    'library_path':['/new/lib'],
+                                    'replacements':[{'target':'/new/lib/libfoo.so','source':str(foo)}]}))
+        code, report = self.diagnose(app, '--overrides', plan, '--verification-dir', self.base/'new-result')
+        self.assertEqual(code, 0, report)
+        self.assertFalse((self.root/'new').exists())
+
+    def test_nondefault_loader_settings_do_not_claim_binding_certainty(self):
+        app, foo = self.fixture()
+        env = os.environ.copy(); env['LD_DYNAMIC_WEAK'] = '1'
+        p = subprocess.run([BINARY, 'diagnose', str(app), '--library-path', str(self.build),
+                            '--format', 'json'], env=env, capture_output=True, check=False)
+        report = json.loads(p.stdout)
+        self.assertEqual(p.returncode, 2)
+        self.assertEqual(report['environment']['loader_settings']['LD_DYNAMIC_WEAK'], '1')
+        self.assertTrue(any(d['rule_id']=='LOADER_SETTINGS_UNKNOWN' for d in report['diagnostics']))
+        self.assertTrue(all(b['certainty']=='unknown' for b in report['bindings']))
+
+    def test_unversioned_request_can_bind_compatibility_version(self):
+        app, foo = self.fixture()
+        app = self.cc('app', 'extern int foo(void);void _start(void){long status=foo(); __asm__ volatile("syscall"::"a"(60L),"D"(status):"rcx","r11","memory"); __builtin_unreachable();}',
+                      '-L'+str(self.build), '-lfoo', '-Wl,-e,_start', '-Wl,--dynamic-linker,'+str(LOADER))
+        version_map = self.build/'compat.map'
+        version_map.write_text('FOO_1.0 { global: foo; local: *; };')
+        compat = self.cc('compat.so', 'int impl(void){return 0;} __asm__(".symver impl,foo@FOO_1.0");',
+                         '-shared', '-Wl,-soname,libfoo.so', '-Wl,--version-script='+str(version_map))
+        shutil.copy(compat, self.root/'lib/libfoo.so')
+        code, report = self.diagnose(app)
+        self.assertEqual(code, 0, report['diagnostics'])
+        binding = next(b for b in report['bindings'] if b['symbol']=='foo')
+        self.assertEqual(binding['provider'], '/lib/libfoo.so')
+        env = os.environ.copy(); env.update(LD_DEBUG='bindings', LD_BIND_NOW='1', LD_PRELOAD=str(compat))
+        env.pop('LD_DEBUG_OUTPUT', None)
+        p = subprocess.run([str(app)], env=env, capture_output=True, check=True)
+        self.assertTrue(any(b"normal symbol `foo'" in line and str(compat).encode() in line
+                            for line in p.stderr.splitlines()), p.stderr)
+
     def test_cache_precedes_default_directory(self):
         app,foo=self.fixture()
         (self.root/'cached').mkdir();shutil.copy(foo,self.root/'cached')

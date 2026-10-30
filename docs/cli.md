@@ -153,3 +153,41 @@ IFUNC 最终实现地址或独立命名空间。依赖不完整、GNU_UNIQUE、D
 证据不足、身份歧义或模型不支持时不强行归因；环境参数变化本身不等于已证明的原因。
 A/B 都已有的问题单独列为持续问题。依赖图不完整时的符号缺失列为待确认问题。
 `static_causal_link` 表示静态需求与差异关联，不证明 A 的全部运行路径成功，也不证明延迟绑定已经执行。
+
+## 修复模拟与复验（阶段 4）
+
+创建 `fix.json`（source 相对路径以此配置文件所在目录为基准）：
+
+```json
+{
+  "schema_version": 1,
+  "kind": "diagnosis_overrides",
+  "library_path": ["/opt/app/lib"],
+  "replacements": [
+    {"target": "/opt/app/lib/libfoo.so", "source": "./fixed/libfoo.so"}
+  ]
+}
+```
+
+```sh
+ExeViewer diagnose ./app --env b-env.json --rootfs ./b-rootfs \
+  --overrides fix.json --verification-dir ./verification-001 --format json
+```
+
+`--verification-dir` 必须是新目录。工具先校验清单和诊断原始环境，再对显式修改重新诊断。
+配置可以覆盖 cwd、library_path、preload、default_paths；replacements 仅替换指定目标
+路径的 ELF 文件，可模拟部署至新目录，不允许替换主产物或目录。未知配置字段会报错，避免拼写错误被忽略。
+替换文件复制到复验目录，原 rootfs 和源文件均不修改。报告保留目标路径，按该路径计算 `$ORIGIN`。
+
+目录保存 before.json、after.json、verification.json、替换文件及指向这些副本的 overrides.json，
+可复用保存的配置再次复验。`repair_verification` 输出消失、持续和新增的诊断，以及修复前后状态；
+诊断按规则、严重程度、对象和消息匹配。“消失”不必然证明修复，需一起检查新增 unknown 和最终状态。
+退出码沿用修复后诊断：0 为检查范围内无阻断，1 为阻断，2 为不完整/错误。
+
+结果始终标记 `runtime_validation: not_run`。如需实际验证，先在真实测试环境部署候选修复，
+再显式 `trace --execute ... --baseline verification-001/after.json`；本命令不会部署或自动执行。
+复验中途遇到错误时，独立输出目录可能留下已复制的证据，原环境不会被修改。
+
+环境清单同时记录 LD_DYNAMIC_WEAK、LD_AUDIT、LD_HWCAP_MASK、GLIBC_TUNABLES、LD_BIND_NOW、
+LD_BIND_NOT、LD_ASSUME_KERNEL 等额外加载器设置；这些规则尚未建模时诊断返回 unknown，
+不冒用默认符号查找规则给出确定提供者。没有记录的宿主设置不会在离线导入时补入。
