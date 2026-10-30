@@ -57,6 +57,12 @@ pub struct DiagnoseArgs {
     /// Import a captured environment; verify its file evidence against --rootfs
     #[arg(long)]
     pub env: Option<PathBuf>,
+    /// Explicit environment/file substitutions for a static repair simulation
+    #[arg(long, requires = "verification_dir", conflicts_with = "interactive")]
+    pub overrides: Option<PathBuf>,
+    /// New directory retaining before/after reports and replacement file copies
+    #[arg(long, requires = "overrides")]
+    pub verification_dir: Option<PathBuf>,
     /// Explore this same diagnosis in an interactive terminal interface
     #[arg(long, conflicts_with = "format")]
     pub interactive: bool,
@@ -127,8 +133,8 @@ fn execute(command: Commands) -> Result<i32, String> {
         Commands::Env {
             command: EnvCommands::Capture { args, output: path },
         } => {
-            if args.env.is_some() || args.interactive {
-                return Err("capture does not accept --env or --interactive".into());
+            if args.env.is_some() || args.interactive || args.overrides.is_some() {
+                return Err("capture does not accept --env, --interactive, or --overrides".into());
             }
             let report = report_for(&args)?;
             let snapshot = super::snapshot::capture(&report, args.default_path.is_some())?;
@@ -141,6 +147,17 @@ fn execute(command: Commands) -> Result<i32, String> {
             )
         }
         Commands::Diagnose(a) => {
+            if a.overrides.is_some() {
+                let (value, code) = super::repair::run(&a)?;
+                return output(
+                    &if matches!(a.format, Format::Json) {
+                        json(&value)?
+                    } else {
+                        format!("ExeViewer static repair verification\n{}", json(&value)?)
+                    },
+                    code,
+                );
+            }
             let r = report_for(&a)?;
             let code = r.exit_code();
             if a.interactive {
@@ -367,6 +384,28 @@ pub(super) fn report_for(args: &DiagnoseArgs) -> Result<Report, String> {
         return Err("--default-path entries must be absolute target paths".into());
     }
     let env = Environment {
+        replacements: Default::default(),
+        loader_settings: if local {
+            [
+                "LD_DYNAMIC_WEAK",
+                "LD_AUDIT",
+                "LD_HWCAP_MASK",
+                "GLIBC_TUNABLES",
+                "LD_BIND_NOW",
+                "LD_BIND_NOT",
+                "LD_ASSUME_KERNEL",
+            ]
+            .into_iter()
+            .filter_map(|key| {
+                std::env::var(key)
+                    .ok()
+                    .filter(|v| !v.is_empty())
+                    .map(|v| (key.into(), v))
+            })
+            .collect()
+        } else {
+            Default::default()
+        },
         rootfs,
         cwd,
         library_path: library

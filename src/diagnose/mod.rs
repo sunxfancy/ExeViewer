@@ -1,4 +1,5 @@
 pub mod cli;
+pub mod repair;
 pub mod explain;
 pub mod bindings;
 pub mod elf_info;
@@ -177,6 +178,12 @@ pub fn diagnose(
         }
     });
     let mut report=Report{schema_version:1,kind:"diagnosis".into(),artifact:input.to_string_lossy().into(),environment:env.clone(),status:String::new(),scope:vec!["Linux ELF64 x86-64 glibc startup dependency and symbol requirements".into()],limitations:vec!["Static startup model; does not prove program execution, ABI semantics, CPU instruction or kernel compatibility.".into(),"dlopen, separate namespaces, IFUNC execution and lazy-binding execution paths require runtime observation.".into(),"Default directories are explicit model inputs; use --default-path to match the target loader build. $LIB/$PLATFORM and CPU hwcaps require target-specific evidence.".into()],objects:vec![Object{path:logical.clone(),chain:vec![logical.clone()],elf:main.clone()}],dependencies:vec![],diagnostics:vec![],bindings:vec![]};
+    if !env.loader_settings.is_empty() {
+        report.issue("LOADER_SETTINGS_UNKNOWN", "unknown", &logical, &[logical.clone()],
+            "Additional loader environment settings are recorded but not modeled".into(),
+            env.loader_settings.iter().map(|(k,v)|format!("{k}={v}")).collect(),
+            "Verify these settings with a target trace; do not treat the default startup binding model as authoritative.");
+    }
     if target_path.is_none()
         && !fs::canonicalize(input)
             .map_err(|e| e.to_string())?

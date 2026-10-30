@@ -119,3 +119,20 @@ ExeViewer trace --execute ./app --output-dir ./capture-001 -- --application-argu
 - [rldd](https://github.com/zatrazz/rldd)：加载器规则模拟和搜索路径。
 - [ELF Dissector](https://github.com/KDE/elf-dissector)：符号依赖、重定位及加载分析。
 - [glibc 动态链接器诊断](https://sourceware.org/glibc/manual/latest/html_node/Dynamic-Linker-Environment-Variables.html)：实际观测的证据来源之一。
+
+## 跨环境诊断闭环增量
+
+本轮四个里程碑按依赖顺序交付：
+
+1. 环境采集：`env capture FILE` 保存与产物关联的环境参数、依赖/配置哈希和缺失候选；
+   `diagnose --env` 配合独立 rootfs 校验并重放。默认目录仍区分显式输入与假设，未自动发现所有加载器编译配置。
+2. 符号核对：预测已支持启动全局作用域中的未定义符号提供者及覆盖关系；trace 比较实际绑定，
+   不支持的作用域保留 unknown，不预测 IFUNC 实现地址或所有已定义符号的内部引用。
+3. 根因解释：`compare --explain` 关联缺库、版本/符号缺失与路径/库内容差异，保留双方证据，
+   将持续问题、待确认问题、无法归因的问题分别呈现。环境变化不自动等于因果关系。
+4. 修复复验：`diagnose --overrides ... --verification-dir ...` 使用独立副本模拟部署与搜索参数修改，
+   保存修复前后报告、复验配置和新增问题。静态复验始终与实际运行验证区分。
+
+验证基线包含真实 glibc loader 对照、环境迁移与证据漂移、预加载符号覆盖、根因解释及修复隔离。
+CI 配置覆盖 Ubuntu 22.04/24.04；远程 CI 结果以各 PR 的实际检查为准。
+完整插件作用域、深层 ABI、其他架构和加载器仍不属于本轮完成范围。CLI 契约见 [使用文档](cli.md)。

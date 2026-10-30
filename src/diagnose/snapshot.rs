@@ -48,6 +48,7 @@ fn evidence(env: &Environment, path: &str) -> Result<FileEvidence, String> {
 pub fn capture(r: &Report, explicit_defaults: bool) -> Result<Snapshot, String> {
     let main = r.objects.first().ok_or("empty diagnosis")?;
     let mut paths: BTreeSet<String> = r.objects.iter().skip(1).map(|o| o.path.clone()).collect();
+    paths.extend(main.elf.interpreter.iter().cloned());
     for edge in &r.dependencies {
         paths.extend(edge.attempts.iter().map(|a| a.path.clone()));
     }
