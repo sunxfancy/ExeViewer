@@ -15,14 +15,6 @@ non-interactive text/JSON commands and an optional terminal interface.
 rules and insufficient evidence are reported as **incomplete**, not as compatibility.
 Static checks do not prove successful execution or full ABI compatibility.
 
-> Development status: the workflow below is implemented in the review branches for
-> [#4](https://github.com/sunxfancy/ExeViewer/pull/4),
-> [#5](https://github.com/sunxfancy/ExeViewer/pull/5),
-> [#6](https://github.com/sunxfancy/ExeViewer/pull/6), and
-> [#7](https://github.com/sunxfancy/ExeViewer/pull/7), on top of
-> [#3](https://github.com/sunxfancy/ExeViewer/pull/3). The default branch may not yet
-> contain these commands. Installation below selects the complete demo branch.
-
 ## See the diagnosis workflow
 
 This reproducible example uses the **same executable** in both environments. It requires
@@ -59,7 +51,7 @@ Requires Rust/Cargo. The demo also requires Linux x86-64, GCC, Python 3, and gli
 The binary is named **`ExeViewer`** (case-sensitive).
 
 ```sh
-git clone --branch docs/diagnostic-workflow-demo https://github.com/sunxfancy/ExeViewer.git
+git clone https://github.com/sunxfancy/ExeViewer.git
 cd ExeViewer
 cargo install --path . --locked
 
