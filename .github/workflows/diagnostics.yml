@@ -1,13 +1,86 @@
 name: ELF diagnostics
-on: [push, pull_request]
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diagnostics-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
+    name: Tests (${{ matrix.os }}, ${{ matrix.profile }})
+    timeout-minutes: 20
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-22.04, ubuntu-24.04]
+        profile: [debug, release]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: sudo apt-get update && sudo apt-get install -y gcc python3
-      - run: cargo test --locked
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}-${{ matrix.profile }}
+      - name: Install fixture dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcc python3
+      - name: Run all tests
+        shell: bash
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          mkdir -p test-results
+          args=()
+          if [[ "$PROFILE" == release ]]; then args+=(--release); fi
+          cargo test --locked "${args[@]}" -- --nocapture --test-threads=1 2>&1 | tee test-results/tests.log
+      - name: Reproduce README diagnosis and repair demo
+        shell: bash
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          python3 docs/demo/run.py --binary "target/$PROFILE/ExeViewer" \
+            --work-dir test-results/demo 2>&1 | tee test-results/demo.log
+      - name: Retain test logs and demo evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostics-${{ matrix.os }}-${{ matrix.profile }}
+          path: test-results/
+          retention-days: 7
+          if-no-files-found: warn
+
+  quality:
+    name: Clippy and documentation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: quality
+      - name: Check correctness lints
+        shell: bash
+        run: |
+          mkdir -p test-results
+          cargo clippy --locked --all-targets -- -D clippy::correctness 2>&1 | tee test-results/clippy.log
+      - name: Validate local documentation links and demo assets
+        if: always()
+        run: python3 tests/check_docs.py
+      - name: Retain lint diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-diagnostics
+          path: test-results/
+          retention-days: 7
+          if-no-files-found: warn
