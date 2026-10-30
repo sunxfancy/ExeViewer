@@ -1,4 +1,4 @@
-# Original ELF viewer
+# Interactive ELF viewer
 
 The original terminal viewer provides ELF metadata, section headers, dynamic symbols,
 PLT information and disassembly. Launch it with:
@@ -7,11 +7,11 @@ PLT information and disassembly. Launch it with:
 ExeViewer --interactive ./app
 ```
 
-These are historical screenshots of the inspection interface. They do not illustrate
-the current compatibility diagnosis workflow; see the [README demo](../Readme.md).
+These original screenshots show the ELF inspection features that remain available.
+They are also included in the [README](../Readme.md), alongside the new compatibility diagnosis demo.
 
-![Historical ELF viewer screenshot 1](1.png)
-![Historical ELF viewer screenshot 2](2.png)
-![Historical ELF viewer screenshot 3](3.png)
-![Historical ELF viewer screenshot 4](4.png)
-![Historical ELF viewer screenshot 5](5.png)
+![ELF inspection screenshot 1](1.png)
+![ELF inspection screenshot 2](2.png)
+![ELF inspection screenshot 3](3.png)
+![ELF inspection screenshot 4](4.png)
+![ELF inspection screenshot 5](5.png)

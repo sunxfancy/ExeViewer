@@ -172,7 +172,7 @@ Full plugin/`dlopen` scopes, separate namespaces, IFUNC implementation selection
 actual instruction/system-call requirements, musl, and other architectures remain outside
 this release's scope. A standalone `.so` lacks a definitive executable host scope.
 
-## Interactive and legacy views
+## Interactive ELF inspection
 
 ```sh
 ExeViewer diagnose ./app --interactive  # Four diagnosis pages; requires a terminal
@@ -180,8 +180,18 @@ ExeViewer --interactive ./app           # Original ELF/section/disassembly viewe
 ExeViewer --report ./app                # Lightweight metadata inventory
 ```
 
-The original viewer remains useful for inspection. Its [historical screenshot gallery](docs/legacy-viewer.md)
-is separate from the diagnosis demo. Metadata inspection alone does not assess compatibility.
+The existing interactive viewer remains available alongside the new diagnosis workflow.
+It provides ELF metadata, section headers, dynamic symbols, PLT information, and
+text-section disassembly. These inspection features have not been removed.
+Metadata inspection alone does not assess compatibility.
+
+The original screenshots below show the ELF inspection interface:
+
+![ELF inspection interface — original screenshot 1](docs/1.png)
+![ELF inspection interface — original screenshot 2](docs/2.png)
+![ELF inspection interface — original screenshot 3](docs/3.png)
+![ELF inspection interface — original screenshot 4](docs/4.png)
+![ELF inspection interface — original screenshot 5](docs/5.png)
 
 ## Documentation and validation
 
