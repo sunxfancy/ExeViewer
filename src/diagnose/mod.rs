@@ -3,6 +3,7 @@ pub mod elf_info;
 pub mod environment;
 pub mod trace;
 pub mod view;
+pub mod snapshot;
 use elf_info::ElfInfo;
 use environment::{CacheEntry, Environment};
 use serde::{Deserialize, Serialize};

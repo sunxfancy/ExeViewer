@@ -113,3 +113,21 @@ Linux x86-64 上的端到端用例需要 Python 3、GCC 和 `/lib64/ld-linux-x86
 解析器要求 LD_DEBUG 的数字 PID 前缀与已知事件格式；没有 PID 的 stderr 仅识别
 已知共享库加载、符号查找及版本缺失错误格式。普通包含 `error:` 的应用日志不会
 直接导致失败；完全没有可识别事件时返回 2。导入文本的格式匹配不构成来源认证。
+
+## 环境清单（阶段 1）
+
+```sh
+ExeViewer env capture ./app --output b-env.json --default-path /lib64:/usr/lib64 --format json
+ExeViewer diagnose ./app --env b-env.json --rootfs ./b-rootfs --format json
+```
+
+`env capture FILE` 不执行目标，沿用 diagnose 的输入选项；`--output` 必须不存在。
+清单是 `schema_version: 1, kind: environment_snapshot`，包含安装路径、程序哈希、
+环境输入、依赖和配置文件哈希、符号链接解析后的路径、缺失候选记录，以及本机各 CPU
+共同的 flags（离线不采宿主 CPU）。默认目录区分显式输入和常见目录假设，不宣称自动发现加载器编译配置。
+CPU flags 不自动换算为可用 ISA 等级，ISA 仍使用明确输入。
+
+清单不打包共享库，需要另行提供 rootfs。导入时校验输入产物和每个记录的文件/缺失候选，
+内容或链接目标变化会拒绝使用旧清单，需重新采集。显式 CLI 参数覆盖清单中的环境参数，
+不继承宿主库路径。校验范围是已记录证据，不是整个文件系统；分析期间应保持文件系统不变。
+即使诊断不完整，仍可保存清单，退出码沿用该次诊断结果。CI 在 Ubuntu 22.04/24.04 执行真实加载器对照测试。

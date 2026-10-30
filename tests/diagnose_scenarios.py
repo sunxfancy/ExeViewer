@@ -202,6 +202,46 @@ class DiagnosisTests(unittest.TestCase):
             self.assertEqual(found[0]['requester_namespace'], '0')
             self.assertTrue(any(b['version'] and b['version'].startswith('GLIBC_') for b in bindings))
 
+    def test_environment_capture_replay_and_drift(self):
+        app, foo = self.fixture()
+        shutil.copy(foo, self.root/'lib')
+        snapshot = self.base/'env.json'
+        code, summary = self.call('env', 'capture', app, '--rootfs', self.root,
+                                 '--target-path', '/app', '--default-path', '/lib',
+                                 '--output', snapshot, '--format', 'json')
+        self.assertEqual(code, 0, summary)
+        manifest = json.loads(snapshot.read_text())
+        self.assertEqual(manifest['default_paths_source'], 'explicit input')
+        self.assertEqual(manifest['cpu_flags'], [])
+        moved = self.base/'moved-root'
+        shutil.copytree(self.root, moved, symlinks=True)
+        code, replay = self.call('diagnose', app, '--env', snapshot, '--rootfs', moved, '--format', 'json')
+        self.assertEqual(code, 0, replay)
+        self.assertTrue(any(e['selected']=='/lib/libfoo.so' for e in replay['dependencies']))
+        (moved/'lib/libfoo.so').write_bytes(b'changed')
+        code, bad = self.call('diagnose', app, '--env', snapshot, '--rootfs', moved, '--format', 'json')
+        self.assertEqual(code, 2)
+        self.assertIn('evidence changed', bad['error'])
+        code, bad = self.call('env', 'capture', app, '--rootfs', self.root,
+                             '--target-path', '/app', '--default-path', '/lib',
+                             '--output', snapshot, '--format', 'json')
+        self.assertEqual(code, 2)
+        self.assertEqual(json.loads(snapshot.read_text()), manifest)
+
+    def test_environment_rejects_new_search_candidate(self):
+        app, foo = self.fixture()
+        shutil.copy(foo, self.root/'lib')
+        (self.root/'early').mkdir()
+        snapshot = self.base/'env.json'
+        code, _ = self.call('env', 'capture', app, '--rootfs', self.root,
+                           '--target-path', '/app', '--default-path', '/lib',
+                           '--library-path', '/early', '--output', snapshot, '--format', 'json')
+        self.assertEqual(code, 0)
+        shutil.copy(foo, self.root/'early')
+        code, bad = self.call('diagnose', app, '--env', snapshot, '--rootfs', self.root, '--format', 'json')
+        self.assertEqual(code, 2)
+        self.assertIn('/early/libfoo.so', bad['error'])
+
     def test_cache_precedes_default_directory(self):
         app,foo=self.fixture()
         (self.root/'cached').mkdir();shutil.copy(foo,self.root/'cached')
