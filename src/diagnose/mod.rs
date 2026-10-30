@@ -1,4 +1,5 @@
 pub mod cli;
+pub mod explain;
 pub mod bindings;
 pub mod elf_info;
 pub mod environment;

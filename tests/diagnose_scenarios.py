@@ -106,6 +106,12 @@ class DiagnosisTests(unittest.TestCase):
         code,d=self.call('compare','--env-a',self.base/'a.json','--env-b',self.base/'b.json','--format','json')
         self.assertEqual(code,1,d)
         self.assertTrue(d['changes'])
+        code, explained = self.call('compare', '--env-a', self.base/'a.json', '--env-b', self.base/'b.json', '--explain', '--format', 'json')
+        roots = explained['explanation']['root_causes']
+        version = next(r for r in roots if r['rule_id']=='VERSION_MISSING')
+        self.assertEqual(version['first_divergence']['kind'], 'library_content')
+        self.assertIn('FOO_2.0', version['consequence'])
+
 
     def test_absolute_target_symlink(self):
         app,foo=self.fixture()
@@ -275,6 +281,52 @@ class DiagnosisTests(unittest.TestCase):
         binding = next(b for b in report['bindings'] if b['symbol']=='foo')
         self.assertEqual(binding['certainty'], 'unknown')
         self.assertIsNone(binding['provider'])
+
+    def compare_reports(self, a, b):
+        paths = [self.base/'a-report.json', self.base/'b-report.json']
+        for path, report in zip(paths, [a, b]): path.write_text(json.dumps(report))
+        return self.call('compare', '--env-a', paths[0], '--env-b', paths[1], '--explain', '--format', 'json')
+
+    def test_explain_missing_library_and_deferred_symbols(self):
+        app, foo = self.fixture()
+        shutil.copy(foo, self.root/'lib')
+        _, a = self.diagnose(app)
+        (self.root/'lib/libfoo.so').unlink()
+        _, b = self.diagnose(app)
+        code, report = self.compare_reports(a, b)
+        self.assertEqual(code, 2)
+        explanation = report['explanation']
+        self.assertEqual(len(explanation['root_causes']), 1)
+        root = explanation['root_causes'][0]
+        self.assertEqual(root['rule_id'], 'LIBRARY_NOT_FOUND')
+        self.assertEqual(root['evidence_a']['selected'], '/lib/libfoo.so')
+        self.assertIsNone(root['evidence_b']['selected'])
+        self.assertTrue(explanation['deferred'])
+        # Repeated failures are not presented as new A/B root causes.
+        _, same = self.compare_reports(b, b)
+        self.assertFalse(same['explanation']['root_causes'])
+        self.assertTrue(same['explanation']['persistent_findings'])
+
+    def test_explain_wrong_library_selection(self):
+        app, foo = self.fixture(version='FOO_2.0')
+        shutil.copy(foo, self.root/'lib')
+        (self.root/'override').mkdir()
+        replacement = self.cc('wrong.so', 'int unrelated(void){return 0;}', '-shared')
+        shutil.copy(replacement, self.root/'override/libfoo.so')
+        _, a = self.diagnose(app)
+        _, b = self.diagnose(app, '--library-path', '/override')
+        code, report = self.compare_reports(a, b)
+        self.assertEqual(code, 1)
+        roots = report['explanation']['root_causes']
+        symbol = next(r for r in roots if r['rule_id']=='SYMBOL_UNRESOLVED')
+        self.assertEqual(symbol['binding_a']['provider'], '/lib/libfoo.so')
+        self.assertIsNone(symbol['binding_b']['provider'])
+        self.assertTrue(any(c['field']=='library_path' for c in report['explanation']['environment_changes']))
+        # Missing A-side binding evidence must not be invented.
+        a['bindings'] = []
+        _, limited = self.compare_reports(a, b)
+        self.assertFalse(limited['explanation']['root_causes'])
+        self.assertTrue(limited['explanation']['unexplained'])
 
     def test_cache_precedes_default_directory(self):
         app,foo=self.fixture()
